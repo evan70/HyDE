@@ -59,3 +59,15 @@ if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
 		description = "[Utilities] shutdown timer after idle",
 	})
 end
+
+-- Alternatívne prepínanie pracovných plôch 1-9 cez ALT.
+-- HyDE má SUPER + 1-9 aj SUPER + KP_1-9; SUPER + číslo však niektoré
+-- vzdialené relácie a hostitelia (VM/SPICE, RDP, macOS) zachytávajú pre seba,
+-- takže do Hyprlandu sa nedostane. ALT + 1-9 je voľné a prejde vždy.
+if hl and hl.bind and hl.dsp then
+	for i = 1, 9 do
+		hl.bind("ALT + " .. i, hl.dsp.focus({ workspace = i }), {
+			description = "[Workspaces|Navigation] workspace " .. i .. " (ALT fallback)",
+		})
+	end
+end
