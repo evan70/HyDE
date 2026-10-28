@@ -42,7 +42,8 @@ case "$wlogoutStyle" in
         export y_hvr=$((y_mon * 20 / hypr_scale))
         ;;
 esac
-export fntSize=$((y_mon * 2 / 100))
+# Vačšie písmo v logout menu (pôvodne 2/100 výšky monitora)
+export fntSize=$((y_mon * 3 / 100))
 cacheDir="$HYDE_CACHE_HOME"
 dcol_mode="${dcol_mode:-dark}"
 [ -f "$cacheDir/wall.dcol" ] && source "$cacheDir/wall.dcol"

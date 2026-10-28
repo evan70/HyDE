@@ -178,6 +178,9 @@ sed -i -e "/^gtk-theme-name=/c\gtk-theme-name=\"$GTK_THEME\"" \
     -e "/^gtk-icon-theme-name=/c\gtk-icon-theme-name=\"$ICON_THEME\"" "$HOME/.gtkrc-2.0"
 GTK3_FONT="${GTK3_FONT:-$FONT}"
 GTK3_FONT_SIZE="${GTK3_FONT_SIZE:-$FONT_SIZE}"
+# GTK2 apps (GIMP, legacy tools) read their font from .gtkrc-2.0, which nothing
+# else updated: bumping the UI font left them on the old size.
+sed -i -e "/^gtk-font-name=/c\gtk-font-name=\"$GTK3_FONT $GTK3_FONT_SIZE\"" "$HOME/.gtkrc-2.0"
 toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-theme-name" "$GTK_THEME"
 toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-icon-theme-name" "$ICON_THEME"
 toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-cursor-theme-name" "$CURSOR_THEME"
