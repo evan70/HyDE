@@ -18,7 +18,11 @@ selected_wall="$1"
 [ -z "$selected_wall" ] && echo "No input wallpaper" && exit 1
 selected_wall="$(readlink -f "$selected_wall")"
 if ! timeout 15 awww query &> /dev/null; then
-    awww-daemon --format xrgb &
+    # The daemon outlives this script, so it must not keep the inherited stdio:
+    # when wallpaper.sh runs inside a command substitution, a daemon holding
+    # that pipe open means the substitution never sees EOF and the caller (e.g.
+    # theme.switch.sh during install.sh) hangs forever.
+    awww-daemon --format xrgb </dev/null &> /dev/null &
     disown
     timeout 15 awww query && timeout 15 awww restore
 fi
