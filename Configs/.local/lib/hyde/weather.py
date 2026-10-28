@@ -219,6 +219,19 @@ def get_country_name(weather: WttrResponse) -> str:
     return weather["nearest_area"][0]["country"][0]["value"]
 
 
+def get_location_label(weather: WttrResponse) -> str:
+    """Returns the location to display.
+
+    wttr.in names the nearest weather station, not the place that was asked
+    for ("Dovalovo" resolves to "Vavrisovo"), so WEATHER_LOCATION_LABEL can
+    override the label without touching the query itself.
+    """
+    label = os.getenv("WEATHER_LOCATION_LABEL", "").strip()
+    if label:
+        return label
+    return f"{get_city_name(weather)}, {get_country_name(weather)}"
+
+
 def format_time(time: str) -> str:
     """Formats the time string according to the specified time format (12h or 24h)."""
     return (time.replace("00", "")).ljust(3)
@@ -438,7 +451,7 @@ def main() -> None:
     if show_icon:
         data["text"] = get_weather_icon(current_weather) + data["text"]
     if show_location:
-        data["text"] += f" | {get_city_name(weather)}, {get_country_name(weather)}"
+        data["text"] += f" | {get_location_label(weather)}"
 
     # waybar tooltip
     data["tooltip"] = ""
@@ -447,7 +460,7 @@ def main() -> None:
             f"<b>{get_description(current_weather)} {get_temperature(current_weather)}</b>\n"
         )
         data["tooltip"] += f"Feels like: {get_feels_like(current_weather)}\n"
-        data["tooltip"] += f"Location: {get_city_name(weather)}, {get_country_name(weather)}\n"
+        data["tooltip"] += f"Location: {get_location_label(weather)}\n"
         data["tooltip"] += f"Wind: {get_wind_speed(current_weather)}\n"
         data["tooltip"] += f"Humidity: {current_weather['humidity']}%\n"
     # Get the weather forecast for the next 2 days

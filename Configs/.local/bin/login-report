@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+# login-report — zhrnie stav SDDM, Hyprland a waybar z logov aktuálneho bootu.
+#
+# Spúšťa sa automaticky po prihlásení z ~/.config/hypr/hyprland.lua.
+# Report vypíše na stdout, uloží do $XDG_STATE_HOME/login-report/last.txt
+# a verdikt pošle ako notifikáciu (dunst).
+#
+# Ručné spustenie: login-report [--quiet]   (--quiet = bez stdout, len súbor+notifikácia)
+
+set -uo pipefail
+
+quiet=0
+[ "${1:-}" = "--quiet" ] && quiet=1
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/login-report"
+mkdir -p "$state_dir"
+report_file="$state_dir/last.txt"
+waybar_cfg="$HOME/.config/waybar/config.jsonc"
+
+# Waybar štartuje súbežne s nami, takže naň počkáme — ale max 10 s.
+for _ in $(seq 1 20); do
+	pgrep -x waybar >/dev/null 2>&1 && break
+	sleep 0.5
+done
+
+# Jeden prechod journalom, zvyšok je grep nad súborom (rýchle a bez opakovaného volania).
+journal_file=$(mktemp)
+trap 'rm -f "$journal_file"' EXIT
+journalctl -b --no-pager -q >"$journal_file" 2>/dev/null
+
+# ---------- SDDM ----------
+# Berieme len journal po prvú úspešnú autentifikáciu — inak by report znečistili
+# neskoršie ručné behy greetera (napr. --test-mode z inej témy).
+auth_line=$(grep -n 'Authentication for user .* successful' "$journal_file" | head -1 | cut -d: -f1)
+# "Starting Wayland user session" prichádza hneď po autentifikácii — patrí ešte k loginu.
+end_line="$auth_line"
+session_line=$(grep -n 'Starting Wayland user session' "$journal_file" | head -1 | cut -d: -f1)
+if [ -n "${session_line:-}" ] && [ -n "${end_line:-}" ] && [ "$session_line" -gt "$end_line" ]; then
+	end_line="$session_line"
+fi
+if [ -n "${end_line:-}" ]; then
+	login_journal=$(head -n "$end_line" "$journal_file")
+else
+	login_journal=$(cat "$journal_file")
+fi
+# PID greetera, ktorý obslúžil toto prihlásenie.
+greeter_pid=$(grep -o 'sddm-greeter\[[0-9]*\]' <<<"$login_journal" | tail -1 | tr -dc '0-9')
+
+theme_path=$(sed -n 's/.*sddm-greeter .*--theme \([^"]*\).*/\1/p' <<<"$login_journal" | head -1)
+theme_name=${theme_path##*/}
+[ -z "$theme_name" ] && theme_name="(neznáma)"
+theme_loaded=$(grep -c 'Loading file:///.*Main.qml' <<<"$login_journal")
+theme_fallback=$(grep -c 'Fallback to' <<<"$login_journal")
+auth_ok=$(grep -c 'Authentication for user .* successful' <<<"$login_journal")
+auth_fail=$(grep -icE 'authentication failure|Authentication error' <<<"$login_journal")
+auth_time=$(grep 'Authentication for user .* successful' <<<"$login_journal" | head -1 | awk '{print $3}')
+session_cmd=$(sed -n 's/.*Starting Wayland user session: *"[^"]*" *"\([^"]*\)".*/\1/p' <<<"$login_journal" | head -1)
+session_name=$(sed -E 's/.* ([^ ]+)$/\1/' <<<"$session_cmd")
+session_name=${session_name%.desktop}
+
+# Hlášky greetera, ktoré stoja za pozornosť (chýbajúce moduly, QML chyby, fonty).
+if [ -n "$greeter_pid" ]; then
+	greeter_msgs=$(grep "sddm-greeter\[$greeter_pid\]" <<<"$login_journal" \
+		| grep -E 'is not installed|Unable to assign|setPointSizeF|Cannot assign' \
+		| sed -E "s/^.*sddm-greeter\\[$greeter_pid\\]: //" \
+		| sort | uniq -c | sort -rn)
+else
+	greeter_msgs=""
+fi
+greeter_msg_count=$(awk '{s+=$1} END{print s+0}' <<<"$greeter_msgs")
+
+# ---------- Hyprland ----------
+hypr_pid=$(pgrep -x Hyprland | head -1)
+hypr_ver=$(hyprctl version 2>/dev/null | sed -n '1s/^Hyprland \([^ ]*\).*/\1/p')
+hypr_log=$(ls -t "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"/hypr/*/hyprland.log 2>/dev/null | head -1)
+hypr_err=0
+hypr_warn=0
+if [ -n "$hypr_log" ] && [ -f "$hypr_log" ]; then
+	hypr_err=$(grep -cE '^(ERR|CRIT) ]:' "$hypr_log")
+	hypr_warn=$(grep -cE '^WARN ]:' "$hypr_log")
+fi
+
+# ---------- waybar ----------
+waybar_pid=$(pgrep -x waybar | head -1)
+bar_line=$(grep 'Bar configured' "$journal_file" | tail -1)
+bar_height_log=$(sed -n 's/.*height: \([0-9]*\).*/\1/p' <<<"$bar_line")
+bar_output=$(sed -n 's/.*for output: //p' <<<"$bar_line")
+bar_height_cfg=$(grep -m1 '"height"' "$waybar_cfg" 2>/dev/null | tr -dc '0-9')
+bar_msgs=$(grep 'waybar\[' "$journal_file" \
+	| grep -E '\[(warning|error)\] ' \
+	| sed -E 's/^.*\[(warning|error)\] //' \
+	| sed -E 's/^module [^:]+: //' \
+	| sort | uniq -c | sort -rn)
+bar_msg_total=$(grep 'waybar\[' "$journal_file" | grep -cE '\[(warning|error)\] ')
+# Error-level hlášky znamenajú nefunkčný modul (napr. mŕtvy custom/swaync),
+# preto idú do verdiktu. Warningy sú zväčša len chýbajúci hardvér (batéria,
+# podsvietenie) a do verdiktu nevstupujú.
+bar_err_total=$(grep 'waybar\[' "$journal_file" | grep -cE '\[error\] ')
+# "Requested height: X is less than the minimum height: Y required by the modules"
+# znamená, že sa obsah baru do nakonfigurovanej výšky nevmestí (Waybar si okno
+# potichu zväčší alebo modul oreže) — to je vždy problém, hoci je to len warning.
+bar_fit_warn=$(grep 'waybar\[' "$journal_file" | grep -c 'less than the minimum height')
+# Opakujúce sa SNI hlášky nie sú problém baru, len hučia v logu.
+bar_sni=$(grep 'waybar\[' "$journal_file" | grep -c 'is already registered')
+
+# ---------- verdikt ----------
+problems=()
+(( auth_fail > 0 )) && problems+=("SDDM: $auth_fail zlyhaných pokusov o prihlásenie")
+(( auth_ok == 0 )) && problems+=("SDDM: v logu nie je úspešná autentifikácia")
+(( theme_fallback > 0 )) && problems+=("SDDM: greeter prešiel na náhradnú tému (téma sa nenačítala)")
+[ -z "$hypr_pid" ] && problems+=("Hyprland nebeží")
+[ -z "$waybar_pid" ] && problems+=("waybar nebeží")
+if [ -n "$bar_height_log" ] && [ -n "$bar_height_cfg" ] && [ "$bar_height_log" != "$bar_height_cfg" ]; then
+	problems+=("waybar: výška ${bar_height_log}px v logu, ale ${bar_height_cfg}px v configu")
+fi
+(( hypr_err > 0 )) && problems+=("Hyprland: $hypr_err chýb v hyprland.log")
+(( bar_err_total > 0 )) && problems+=("waybar: $bar_err_total error hlášok (nefunkčný modul?)")
+(( bar_fit_warn > 0 )) && problems+=("waybar: obsah sa nevmestí do ${bar_height_cfg:-?} px (moduly žiadajú viac)")
+
+if (( ${#problems[@]} == 0 )); then
+	if (( auth_ok == 1 )); then
+		verdict="OK — prihlásenie na 1. pokus, Hyprland a waybar ${bar_height_log:-?} px bežia"
+	else
+		verdict="OK — prihlásenie prešlo, Hyprland a waybar ${bar_height_log:-?} px bežia"
+	fi
+else
+	verdict="POZOR — ${#problems[@]} problém(y): ${problems[0]}"
+fi
+
+# ---------- report ----------
+{
+	echo "Login report — $(date '+%Y-%m-%d %H:%M:%S') (uptime: $(uptime -p | sed 's/^up //'))"
+	echo
+	echo "SDDM"
+	if (( theme_loaded > 0 )); then
+		echo "  téma:      $theme_name ($theme_path) — načítaná"
+	else
+		echo "  téma:      $theme_name ($theme_path) — Main.qml sa v logu nenašiel"
+	fi
+	if (( auth_ok > 0 )); then
+		echo "  auth:      OK, $auth_ok úspešná autentifikácia, $auth_fail zlyhaní (naposledy ${auth_time:-?})"
+	else
+		echo "  auth:      žiadna úspešná autentifikácia, $auth_fail zlyhaní"
+	fi
+	echo "  session:   ${session_name:-?}"
+	if (( theme_fallback > 0 )); then
+		echo "  fallback:  ÁNO ($theme_fallback) — téma sa nenaložila, beží vstavaná"
+	fi
+	echo "  hlášky:    $greeter_msg_count (QML témy, kozmetické — do verdiktu nevstupujú)"
+	if (( greeter_msg_count > 0 )); then
+		sed -E 's/^ *([0-9]+) /             \1x /' <<<"$greeter_msgs"
+	fi
+	echo
+	echo "Hyprland"
+	if [ -n "$hypr_pid" ]; then
+		echo "  proces:    beží (PID $hypr_pid)${hypr_ver:+, verzia $hypr_ver}"
+	else
+		echo "  proces:    NEBEŽÍ"
+	fi
+	echo "  log:       $hypr_err ERR, $hypr_warn WARN${hypr_log:+ ($hypr_log)}"
+	echo
+	echo "waybar"
+	if [ -n "$waybar_pid" ]; then
+		echo "  proces:    beží (PID $waybar_pid)"
+	else
+		echo "  proces:    NEBEŽÍ"
+	fi
+	if [ -n "$bar_height_log" ]; then
+		mark="✓"
+		if [ -n "$bar_height_cfg" ] && [ "$bar_height_log" != "$bar_height_cfg" ]; then
+			mark="✗ (config $bar_height_cfg px)"
+		fi
+		echo "  výška:     ${bar_height_log} px $mark${bar_output:+, output $bar_output}"
+	else
+		echo "  výška:     v logu nie je 'Bar configured' (config ${bar_height_cfg:-?} px)"
+	fi
+	echo "  hlášky:    $bar_msg_total ($bar_err_total error, $((bar_msg_total - bar_err_total)) warning)"$([ "$bar_sni" -gt 0 ] && echo " (+$bar_sni× SNI 'already registered')")
+	if (( bar_fit_warn > 0 )); then
+		echo "  výška:     ✗ ${bar_fit_warn}× moduly žiadali viac, než je výška baru"
+	fi
+	if (( bar_msg_total > 0 )); then
+		sed -E 's/^ *([0-9]+) /             \1x /' <<<"$bar_msgs"
+	fi
+	echo
+	echo "Verdikt: $verdict"
+} >"$report_file" 2>&1
+
+(( quiet == 0 )) && cat "$report_file"
+
+# ---------- notifikácia ----------
+if command -v notify-send >/dev/null 2>&1 && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
+	body="$verdict"
+	if (( ${#problems[@]} > 0 )); then
+		for p in "${problems[@]:0:3}"; do
+			body+=$'\n'"• $p"
+		done
+	fi
+	body+=$'\n'"Detaily: $report_file"
+	notify-send -a "login-report" -i dialog-information -t 15000 "Login report" "$body"
+fi
+
+exit 0

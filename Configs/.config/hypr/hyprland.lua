@@ -42,3 +42,12 @@ end
 -- The full reference is KEYBINDINGS.md in the HyDE repository.
 --
 -- Other Lua files next to this one can be pulled in with require("name").
+
+-- Po prihlásení zhrnie stav SDDM/Hyprland/waybar z logov: notifikácia + report
+-- v $XDG_STATE_HOME/login-report/last.txt. Skript sám čaká na waybar max 10 s,
+-- takže stačí krátke oneskorenie, aby stihol nabehnúť.
+if hl and hl.on and hl.exec_cmd then
+	hl.on("hyprland.start", function()
+		hl.exec_cmd("sleep 6 && exec $HOME/.local/bin/login-report --quiet")
+	end)
+end
