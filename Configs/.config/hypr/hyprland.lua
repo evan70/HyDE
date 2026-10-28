@@ -51,3 +51,11 @@ if hl and hl.on and hl.exec_cmd then
 		hl.exec_cmd("sleep 6 && exec $HOME/.local/bin/login-report --quiet")
 	end)
 end
+
+-- Vypnutie stroja po nečinnosti (náhrada xfce4-power-manageru): rofi menu
+-- s profilmi, ktoré čítajú listenery v hypridle.conf.
+if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
+	hl.bind("SUPER + ALT + Delete", hl.dsp.exec_cmd("$HOME/.local/bin/idle-shutdown select"), {
+		description = "[Utilities] shutdown timer after idle",
+	})
+end

@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# idle-shutdown — vypnutie stroja po nečinnosti, s voliteľnými profilmi.
+#
+# Hypridle nemá dynamické timeouts, preto sú v hypridle.conf listenery pre
+# všetky profily naraz (30/60/120/180 min) a každý volá `check <minúty>`.
+# Skript vypne stroj len vtedy, keď je vybraný profil rovnaký alebo kratší —
+# tak sa dá profil meniť za behu bez prepisovania konfigu.
+#
+# Použitie:
+#   idle-shutdown / idle-shutdown select   rofi menu, uloží profil
+#   idle-shutdown check <minúty>           volá hypridle
+#   idle-shutdown suspend                  suspend, ak nie je aktívny profil
+#   idle-shutdown status                   vypíše aktuálny profil
+#   idle-shutdown off                      vypne profil (ekvivalent "Vypnuté")
+#
+# Ladenie: IDLE_SHUTDOWN_DRY=1 (len vypíše, čo by spravil),
+#          IDLE_SHUTDOWN_GRACE=<sekundy> (predvolené 30).
+set -uo pipefail
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/idle-shutdown"
+state_file="${state_dir}/minutes"
+mkdir -p "$state_dir"
+
+read_profile() {
+	local p
+	p=$(cat "$state_file" 2>/dev/null || echo 0)
+	[[ "$p" =~ ^[0-9]+$ ]] || p=0
+	echo "$p"
+}
+
+notify() {
+	command -v notify-send >/dev/null 2>&1 || return 0
+	[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] || return 0
+	notify-send -a idle-shutdown -i system-shutdown "$@"
+}
+
+label_for() {
+	case "$1" in
+	0) echo "vypnuté" ;;
+	30) echo "po 30 minútach nečinnosti" ;;
+	60) echo "po 60 minútach nečinnosti" ;;
+	120) echo "po 2 hodinách nečinnosti" ;;
+	180) echo "po 3 hodinách nečinnosti" ;;
+	*) echo "po ${1} minútach nečinnosti" ;;
+	esac
+}
+
+save_profile() {
+	local minutes="$1"
+	[[ "$minutes" =~ ^[0-9]+$ ]] || {
+		echo "Neplatný profil: $minutes" >&2
+		return 2
+	}
+	printf '%s\n' "$minutes" >"$state_file"
+	if ((minutes == 0)); then
+		notify "Vypnutie po nečinnosti je vypnuté"
+	else
+		notify "Vypnem stroj $(label_for "$minutes")"
+	fi
+	echo "profil: $minutes ($(label_for "$minutes"))"
+}
+
+select_profile() {
+	local options choice
+	options=$(printf '%s\n' \
+		"Vypnuté" \
+		"Za 30 minút nečinnosti" \
+		"Za 60 minút nečinnosti" \
+		"Za 2 hodiny nečinnosti" \
+		"Za 3 hodiny nečinnosti")
+
+	if command -v rofi >/dev/null 2>&1; then
+		choice=$(printf '%s\n' "$options" | rofi -dmenu -p "Vypnúť po nečinnosti" \
+			-mesg "Vyber profil; 'Vypnuté' ruší aj naplánované vypnutie" \
+			-theme-str 'window{width: 30%;}')
+	else
+		printf '%s\n' "$options"
+		return 0
+	fi
+	[ -n "${choice:-}" ] || return 0
+
+	case "$choice" in
+	"Vypnuté") save_profile 0 ;;
+	"Za 30 minút nečinnosti") save_profile 30 ;;
+	"Za 60 minút nečinnosti") save_profile 60 ;;
+	"Za 2 hodiny nečinnosti") save_profile 120 ;;
+	"Za 3 hodiny nečinnosti") save_profile 180 ;;
+	*) return 0 ;;
+	esac
+}
+
+check_idle() {
+	local minutes="${1:-0}" profile grace
+	profile=$(read_profile)
+	# Nič nevybrané, alebo je vybraný dlhší profil než tento listener.
+	((profile == 0)) && return 0
+	((minutes < profile)) && return 0
+
+	if [ "${IDLE_SHUTDOWN_DRY:-0}" = "1" ]; then
+		echo "DRY: profil ${profile} min, idle ${minutes} min -> systemctl poweroff"
+		return 0
+	fi
+
+	grace="${IDLE_SHUTDOWN_GRACE:-30}"
+	notify "Vypínam o ${grace} s" "Profil: $(label_for "$profile"). Zruš to: idle-shutdown select → Vypnuté"
+	sleep "$grace"
+
+	# Kto sa medzitým vrátil a odomkol, tomu stroj nevypneme.
+	if pgrep -x hyprlock >/dev/null 2>&1; then
+		systemctl poweroff
+	else
+		notify "Vypnutie zrušené" "Stroj sa odomkol, ostávam bežať."
+	fi
+}
+
+case "${1:-select}" in
+select) select_profile ;;
+check) check_idle "${2:-0}" ;;
+suspend)
+	# S aktívnym profilom suspend preskočíme — inak by sa vypnutie nikdy
+	# nespustilo, lebo po prebudení sa idle počíta od nuly.
+	if (($(read_profile) > 0)); then
+		exit 0
+	fi
+	systemctl suspend
+	;;
+status)
+	profile=$(read_profile)
+	if ((profile == 0)); then
+		echo "vypnuté"
+	else
+		echo "aktívny profil: $profile min ($(label_for "$profile"))"
+	fi
+	;;
+off) save_profile 0 ;;
+*)
+	echo "Použitie: $0 [select|check <min>|suspend|status|off]" >&2
+	exit 2
+	;;
+esac
