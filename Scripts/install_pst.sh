@@ -35,6 +35,16 @@ if pkg_installed sddm; then
             sudo touch /etc/sddm.conf.d/the_hyde_project.conf
             sudo cp /etc/sddm.conf.d/the_hyde_project.conf /etc/sddm.conf.d/backup_the_hyde_project.conf
             sudo cp /usr/share/sddm/themes/${sddmtheme}/the_hyde_project.conf /etc/sddm.conf.d/
+
+            # Obnoviť používateľské úpravy témy (font 13 pt, password field, QML opravy) po rozbalení tarballu
+            for sddm_file in theme.conf Main.qml Components/Input.qml \
+                Components/Clock.qml Components/SessionButton.qml Components/SystemButtons.qml; do
+                sddm_src="${cloneDir}/Configs/usr/share/sddm/themes/${sddmtheme}/${sddm_file}"
+                if [ -f "${sddm_src}" ]; then
+                    sudo cp -f "${sddm_src}" "/usr/share/sddm/themes/${sddmtheme}/${sddm_file}"
+                    print_log -g "[DISPLAYMANAGER] " -b " :: " "restored ${sddmtheme}/${sddm_file} from HyDE..."
+                fi
+            done
         fi
 
         print_log -g "[DISPLAYMANAGER] " -b " :: " "sddm configured with ${sddmtheme} theme..."
