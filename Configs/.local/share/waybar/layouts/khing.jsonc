@@ -3,6 +3,7 @@
   "output": ["*"],
   "exclusive": true,
   "passthrough": false,
+  "height": 44,
   "reload_style_on_change": true,
   "include": [
     // "$XDG_CONFIG_HOME/waybar/modules/*json*", 
@@ -52,7 +53,6 @@
       "custom/gpuinfo",
       "custom/cpuinfo",
       "custom/sensorsinfo",
-      "custom/swaync",
       "custom/dunst",
       "custom/hyde-menu"
     ]

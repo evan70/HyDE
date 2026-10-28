@@ -2,12 +2,13 @@
   "layer": "top",
   "output": ["*"],
   "position": "top",
+  "height": 44,
   "mode": "dock",
   "exclusive": true,
   "passthrough": false,
   "reload_style_on_change": true,
   "include": [
-    "modules/*json*", // Resolve relative to this config for stable Waybar releases.
+    // "modules/*json*", // Vypnuté: tento adresár tu neexistuje (moduly sú v $XDG_DATA_HOME/waybar/modules), Waybar inak loguje "Unable to find resource file".
     "$XDG_DATA_HOME/waybar/modules/*json*" // Also support waybar-git's data modules.
     // "$XDG_CONFIG_HOME/waybar/includes/includes.json" // Deprecated on newer Waybar releases.
   ],
@@ -54,7 +55,6 @@
       "custom/gpuinfo",
       "custom/cpuinfo",
       "custom/sensorsinfo",
-      "custom/swaync",
       "custom/dunst",
       "custom/hyde-menu"
     ]

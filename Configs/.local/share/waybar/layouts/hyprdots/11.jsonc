@@ -1,7 +1,7 @@
 {
   "layer": "top",
   "output": ["*"],
-  "height": 10,
+  "height": 44,
   "exclusive": true,
   "passthrough": false,
   "reload_style_on_change": true,

@@ -5,7 +5,7 @@
     "output": [
         "*"
     ],
-    "height": 10,
+    "height": 44,
     "exclusive": true,
     "passthrough": false,
     "reload_style_on_change": true,
@@ -57,7 +57,6 @@
             "custom/gpuinfo",
             "custom/cpuinfo",
             "custom/sensorsinfo",
-            "custom/swaync",
             "custom/hyde-menu"
         ]
     }

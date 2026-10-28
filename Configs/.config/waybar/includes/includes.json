@@ -72,7 +72,6 @@
         "/home/khing/.local/share/waybar/modules/hyprland-language.jsonc",
         "/home/khing/.local/share/waybar/modules/hyprland-window.jsonc",
         "/home/khing/.local/share/waybar/modules/hyprland-workspaces.jsonc",
-        "/home/khing/.local/share/waybar/modules/custom-swaync.jsonc",
         "/home/khing/.local/share/waybar/modules/wlr-taskbar.jsonc",
         "/home/khing/.local/share/waybar/modules/wlr-taskbar#windows.jsonc",
         "/home/khing/.local/share/waybar/modules/clock.jsonc",

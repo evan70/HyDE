@@ -616,12 +616,29 @@ def kill_waybar():
 
 
 def restart_waybar():
-    """Reload Waybar if running to prevent the hiding bug, otherwise start it."""
-    if is_waybar_running_for_current_user():
-        logger.debug("Hot-reloading Waybar config via SIGUSR2...")
-        _signal_waybar("SIGUSR2")
-    else:
+    """Restart Waybar after a config/style change.
+
+    Waybar 0.15's SIGUSR2 hot reload forks a worker that can abort with
+    SIGABRT and leave a coredump. A full unit restart applies the change
+    without that failure mode and costs only a short bar flicker.
+    """
+    if not is_waybar_running_for_current_user():
         run_waybar()
+        return
+
+    if HAS_SYSTEMD:
+        logger.debug(f"Restarting Waybar via {UNIT_NAME}...")
+        result = subprocess.run(
+            ["systemctl", "--user", "restart", UNIT_NAME],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            logger.error(f"Failed to restart {UNIT_NAME}: {result.stderr.strip()}")
+        return
+
+    logger.debug("Restarting Waybar (non-systemd)...")
+    kill_waybar()
+    run_waybar()
 
 
 def rofi_file_selector(

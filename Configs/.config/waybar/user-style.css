@@ -1,1 +1,47 @@
 /* User custom styles */
+
+/* Bigger waybar text (HyDE default is 10px in includes/global.css).
+ *
+ * 18 px is the ceiling for this 44 px bar on a 1680 px wide screen: the text
+ * alone already fills the width, so the em-based spacing below has to give
+ * way. Measured with `hyprctl layers` (surface stays 1680x44, so nothing is
+ * pushed past the screen edge nor grown past the configured height):
+ *   - group margins   HyDE 0.3em top/bottom, 1em left/right -> 0.15em / 0.5em
+ *   - label padding   HyDE 0.2em left/right                -> 0.1em
+ * Going to 19 px needs a wider screen, not a taller bar. */
+* {
+    font-size: 18px;
+}
+
+window#waybar.top #leaf,
+window#waybar.top #leaf-inverse,
+window#waybar.top #pill,
+window#waybar.top #pill-in {
+    margin: 0.15em 0.5em;
+}
+
+window#waybar.top label.module {
+    padding-left: 0.1em;
+    padding-right: 0.1em;
+}
+
+/* Workspaces in a 44 px bar: keep them compact horizontally so the taskbar
+ * still has room, and center them vertically. */
+#workspaces button {
+    padding-left: 0.35em;
+    padding-right: 0.35em;
+    margin-top: 0.2em;
+    margin-bottom: 0.2em;
+}
+
+#workspaces button.active {
+    padding-left: 1.1em;
+    padding-right: 1.1em;
+}
+
+/* Tray icons are ~21 px at 18 px text; give them a little side room without
+ * stealing width from the right-hand modules. */
+#tray {
+    margin-left: 0.4em;
+    margin-right: 0.4em;
+}
