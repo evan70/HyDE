@@ -170,12 +170,11 @@ start_inhibitor() {
         echo "Error: systemd-inhibit not found, cannot activate Caffeine mode" >&2
         return 1
     fi
-    # A Waybar reload (layout switch, theme change) runs `systemctl --user kill
-    # -s SIGUSR2` on Waybar's unit, which signals every process in its cgroup,
-    # and a stop or crash-restart of the unit (KillMode=control-group) kills
-    # them all. Started from Waybar's on-click, the inhibitor sat in that
-    # cgroup and died with every reload. So when a user manager is reachable
-    # it gets its own transient scope, which is what keeps it alive. `setsid`
+    # A Waybar restart (layout switch, theme change) stops the unit with
+    # KillMode=control-group, which kills every process in its cgroup. Started
+    # from Waybar's on-click, the inhibitor sat in that cgroup and died with
+    # every reload. So when a user manager is reachable it gets its own
+    # transient scope, which is what keeps it alive. `setsid`
     # additionally takes it out of the on-click's process group, which Waybar
     # may killpg() when it tears a module down.
     # Both setsid (not a group leader here) and `systemd-run --scope` exec in
