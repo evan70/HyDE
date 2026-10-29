@@ -67,5 +67,27 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 ### Ešte otvorené
 - **Push** (4.3): hotový — `49ee7d0` je na `origin/master`, „Fork checks“ aj upstream „Tests“ zelené. Remote `evan70/HyDE` je verejný (`git ls-remote` bez credentials), takže notas sa klonuje bez prihlásenia.
 - **Notas:** `git clone https://github.com/evan70/HyDE.git ~/HyDE` → `./Scripts/install.sh -i -s` (na holom stroji) → `./Scripts/machine-setup.sh` → človek: reboot, login, téma, `gh auth login`. Starý účet na notase zostáva nedotknutý (zdieľa len login obrazovku).
-- **Prehľad okien — druhá zmena:** okno otvorené počas prehľadu a kill/close tlačidlo na dlaždici (rozhodnutie layer-shell vs. klávesa v submape `overview`).
+- **Prehľad okien — druhá zmena:** hotová, viď sekcia nižšie.
 - `sync-to-second-machine` sa po pushi a overení na notase archivuje (`openspec archive`).
+
+## 2026-10-29 (noc) — prehľad okien: druhá zmena, apply
+
+### Hotovo
+- **Zmena `overview-tile-controls`** (4/4 artefakty, `openspec validate` OK): dlaždicu sa dá zavrieť/zabiť bez opustenia prehľadu (stredné tlačidlo, `Delete`/`d`, `SHIFT` = kill), zvyšok sa preloží a posledná dlaždica prehľad zavrie. Okno, ktoré sa otvorí počas prehľadu, sa priberie do mriežky (`--adopt=ADRESA`) a po zavretí sa vráti na plochu aktívnu pred prehľadom (`origin_workspace`).
+- **Jedna layout cesta:** mriežka je v `layout_tiles()` — používa ju otvorenie, pribratie aj zavretie dlaždice.
+
+### Dva skutočné bugy nájdené live testom
+1. **`hl.dsp.window.float` ignoruje `action`** — `set` aj `unset` vždy prepnú (overené štyrmi dispatchmi na jednom okne). Otvorenie to nepostrehlo (okná sú tiled), ale pribratie prekladá už floating okná → odplavilo ich a mriežka skolabovala do tiling. `set_floating()` teraz číta živý stav a dispatchne len pri rozdiele.
+2. **Fullscreen okno sa nedá posunúť ani zmenšiť** („Window is fullscreen“) — zostalo na celom monitore a prekrylo dlaždice. `layout_tiles()` preto pred rozložením fullscreen zruší a `close()` ho vráti zo záznamu; kontrola sa opakuje aj v `fit_in_cells()`, lebo nové okno hlási `fullscreen 1` (krátkodobý maximized stav) až chvíľu po zmapovaní.
+
+### Overené na bežiacej session
+- A/B starý vs. nový skript na tých istých 4 oknách: rovnaké dlaždice (`541×503`, rovnaké pozície), po zavretí obe vrátili `825×984` tiled → refactor nezmenil výsledok.
+- Pribratie `kitty` počas prehľadu: 4. dlaždica v mriežke, `submap` ostal `overview`; po `--cancel` okno na ploche 1 (origin).
+- `--close-pointer`: okno zmizlo, zvyšok sa preložil 5→4 a 4→3 (`541×503` → `818×503`), prehľad zostal otvorený. `--kill-pointer`: SIGKILL, zvyšok preložený.
+- Posledná dlaždica (skonštruovaný stav jedného okna, aby som nezavrel okná používateľa): prehľad sa ukončil — `special:exposed` skrytá, `submap` `default`, `state.json` preč.
+- Fullscreen okno (`fs=2`) v prehľade: dlaždica `541×503` s `fs=0`, po zavretí späť `fs=2` na `1680×1050`.
+- `hyprctl -j binds`: 9 bindov v submape `overview` s popismi; v `default` submape na `Delete`/`d`/`mouse:273` bez modifikátora nič (kolízia len `SUPER + Delete`, `SUPER + drag`).
+- Kontroly: `check_python.py` OK, `luac5.4 -p` 78 súborov OK, upstream `run.sh binds` → 164 bindov, 1 prípad, 0 zlyhaní, `openspec validate` OK.
+
+### Poznámka k prostrediu
+- Nové okno na tejto session chvíľu hlási `fullscreen 1` (maximized) a po pár sekundách / ďalšom mapovaní to zmizne — nie je to perzistentná window rule (`hyprctl reload` to nezmenil, `alacritty` aj `kitty` sa správajú rovnako). Prehľad to musí tolerovať, čo je teraz súčasťou layout cesty.

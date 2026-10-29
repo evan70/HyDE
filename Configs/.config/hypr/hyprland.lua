@@ -104,6 +104,10 @@ end
 -- žiadny event neprišiel a nič by sa nestalo. ESC a SUPER + ` sú v submape
 -- tiež, aby sa z neho nedalo zaseknúť (submap vypína všetky ostatné klávesy).
 -- Mimo prehľadu je submap neaktívny, takže bežné klikanie ostáva nedotknuté.
+--
+-- Stredné tlačidlo a Delete/d zavrú dlaždicu pod kurzorom, Shift+stredné a
+-- Shift+Delete/d ju zabijú. Prehľad ostane otvorený a zvyšok sa preloží;
+-- posledná dlaždica prehľad zavrie.
 if hl and hl.define_submap and hl.dsp and hl.dsp.exec_cmd then
 	hl.define_submap("overview", "reset", function()
 		hl.bind("mouse:272", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --pointer"), {
@@ -114,6 +118,24 @@ if hl and hl.define_submap and hl.dsp and hl.dsp.exec_cmd then
 		})
 		hl.bind("SUPER + grave", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview"), {
 			description = "[Window Management] tiled overview of all windows",
+		})
+		hl.bind("mouse:273", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --close-pointer"), {
+			description = "[Window Management] overview: close the window under the cursor",
+		})
+		hl.bind("SHIFT + mouse:273", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --kill-pointer"), {
+			description = "[Window Management] overview: kill the window under the cursor",
+		})
+		hl.bind("Delete", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --close-pointer"), {
+			description = "[Window Management] overview: close the window under the cursor",
+		})
+		hl.bind("SHIFT + Delete", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --kill-pointer"), {
+			description = "[Window Management] overview: kill the window under the cursor",
+		})
+		hl.bind("d", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --close-pointer"), {
+			description = "[Window Management] overview: close the window under the cursor",
+		})
+		hl.bind("SHIFT + d", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --kill-pointer"), {
+			description = "[Window Management] overview: kill the window under the cursor",
 		})
 	end)
 end

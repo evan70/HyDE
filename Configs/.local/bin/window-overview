@@ -13,6 +13,14 @@ nepríde. Okná, ktoré sa pod veľkosť bunky nedajú zmenšiť (Telegram a in�
 appky s vlastnou minimálnou veľkosťou), dostanú vlastný stĺpec po pravej
 strane, aby neprekrývali susedné dlaždice.
 
+Dlaždicu sa dá aj zavrieť: stredné tlačidlo (`--close-pointer`) a Delete/d
+zavrú okno pod kurzorom, Shift+stredné a Shift+Delete/d ho zabijú
+(`--kill-pointer`). Zvyšok sa preloží, prehľad ostane otvorený; posledná
+dlaždica prehľad zavrie. Okno, ktoré sa otvorí počas prehľadu, sa priberie do
+mriežky (`--adopt=ADRESA`) a pri zavretí sa vráti na plochu, ktorá bola
+aktívna pred prehľadom — inak by zostalo ležať na special:exposed a prekrývalo
+dlaždice.
+
 Stav sa drží v $XDG_STATE_HOME/window-overview/state.json — bez neho by sa
 okná nedali vrátiť tam, odkiaľ prišli.
 
@@ -73,8 +81,17 @@ def move_to_workspace(addr: str, workspace) -> None:
 
 
 def set_floating(addr: str, floating: bool) -> None:
-    action = "set" if floating else "unset"
-    dispatch(f'hl.dsp.window.float({{ window = {window(addr)}, action = "{action}" }})')
+    """Nastaví floating len vtedy, keď sa líši od živého stavu.
+
+    `hl.dsp.window.float` v tomto Hyprlande parameter `action` ignoruje a vždy
+    prepína — `set` na už floating okno ho vráti do tiling, `unset` na tiled ho
+    odplaví (overené na bežiacom sedení). Preto sa dispatch posiela len pri
+    rozdiele; bez toho sa mriežka pri pribratí okna rozsype.
+    """
+    live = next((c for c in clients() if c["address"] == addr), None)
+    if live is None or bool(live["floating"]) == floating:
+        return
+    dispatch(f"hl.dsp.window.float({{ window = {window(addr)} }})")
 
 
 def move_pixel(addr: str, x: int, y: int) -> None:
@@ -112,6 +129,17 @@ def special_visible() -> bool:
 
 def area(client: dict) -> int:
     return client["size"][0] * client["size"][1]
+
+
+def workspace_of(client: dict) -> int:
+    """Číslo plochy okna; pri `special:exposed` je `id` nil, preto nie ["id"]."""
+    return client["workspace"].get("id") or 0
+
+
+def normalize_address(addr: str) -> str:
+    """Event socket posiela adresu bez `0x`, `hyprctl clients` s ním."""
+    addr = addr.strip()
+    return addr if addr.startswith("0x") else "0x" + addr
 
 
 def submap_available() -> bool:
@@ -175,12 +203,37 @@ def fit_in_cells(cells: dict[str, tuple[int, int]], cell_w: int, cell_h: int) ->
         if addr not in cells:
             continue
         x, y = cells[addr]
+        if c.get("fullscreen"):
+            # Okno, ktoré sa práve otvorilo, môže byť chvíľu „maximized“
+            # (fullscreen 1) — Hyprland potom odmietne resize aj move, takže
+            # dlaždica zostane na celom monitore. Stav sa preto kontroluje aj
+            # tu, po prvom prechode, keď už je okno na svojej ploche.
+            fullscreen_state(addr, 0)
+            time.sleep(0.15)
+            c = next((live for live in clients() if live["address"] == addr), c)
         if c["size"] != [cell_w, cell_h]:
             resize_pixel(addr, cell_w, cell_h)
             c = next((live for live in clients() if live["address"] == addr), c)
             x += max(0, (cell_w - c["size"][0]) // 2)
             y += max(0, (cell_h - c["size"][1]) // 2)
         move_pixel(addr, x, y)
+
+
+def tile_sizes(ordered: list[str], tries: int = 4) -> dict[str, list[int]]:
+    """Počká, kým sa resize naozaj prejaví, a vráti veľkosti dlaždíc.
+
+    Okno, ktoré práve prišlo z dwindle, chvíľu hlási starú (plnú) veľkosť. Keď
+    sa prečíta priskoro, oversized vetva ho pošle do vlastného stĺpca a mriežka
+    sa rozsype — preto sa čaká na dve rovnaké čítania za sebou.
+    """
+    previous: dict[str, list[int]] = {}
+    for _ in range(tries):
+        sizes = {c["address"]: c["size"] for c in clients() if c["address"] in ordered}
+        if sizes and sizes == previous:
+            return sizes
+        previous = sizes
+        time.sleep(0.2)
+    return previous
 
 
 def load_state():
@@ -233,7 +286,7 @@ def restore_panes(workspace_id: int, desired: list[dict], alive: set[str]) -> No
     )
     for index, target in enumerate(targets):
         live = sorted(
-            (c for c in clients() if c["workspace"]["id"] == workspace_id and not c["floating"]),
+            (c for c in clients() if workspace_of(c) == workspace_id and not c["floating"]),
             key=lambda c: (-area(c), c["at"][1], c["at"][0]),
         )
         if index >= len(live) or live[index]["address"] == target["address"]:
@@ -248,6 +301,16 @@ def close(state: dict, select: bool = False, selected: str | None = None) -> Non
         STATE.unlink(missing_ok=True)
         leave_submap()
         return  # stav z inej verzie skriptu — radšej nič neposúvať
+
+    # Okná, ktoré v stave nie sú a predsa ostali na special:exposed (napr. okno
+    # pribraté skôr, než ho stihol watcher), by sa po skrytí plochy stratili.
+    # Vrátime ich na plochu, ktorá bola aktívna pred prehľadom.
+    known = {e["address"] for e in entries}
+    for c in clients():
+        if c["address"] in known:
+            continue
+        if str(c["workspace"].get("name", "")).startswith("special:"):
+            move_to_workspace(c["address"], state.get("origin_workspace") or 1)
 
     # Kliknutie na dlaždicu = fokus na to okno. Použijeme ho ako cieľ namiesto
     # okna, ktoré bolo aktívne pred prehľadom.
@@ -302,43 +365,40 @@ def close(state: dict, select: bool = False, selected: str | None = None) -> Non
     leave_submap()
 
 
-def open_overview(windows: list[dict]) -> None:
+def clear_fullscreen(ordered: list[str]) -> None:
+    """Dočasne zruší fullscreen dlaždiciam, ktoré ho majú.
+
+    Fullscreen okno Hyprland odmietne presunúť aj zmenšiť („Window is
+    fullscreen“), takže by zostalo na celom monitore a prekrylo ostatné
+    dlaždice. Stav sa zapisuje do state a `close()` ho vracia.
+    """
+    live = {c["address"]: c for c in clients()}
+    cleared = False
+    for addr in ordered:
+        if (live.get(addr) or {}).get("fullscreen"):
+            fullscreen_state(addr, 0)
+            cleared = True
+    if cleared:
+        time.sleep(0.2)  # nech sa nová geometria usadí pred resize
+
+
+def layout_tiles(ordered: list[str]) -> None:
+    """Rozloží dané okná do mriežky na fokusovanom monitore.
+
+    Volá to otvorenie prehľadu, pribratie nového okna aj zatvorenie dlaždice,
+    aby všetky tri cesty počítali mriežku rovnako.
+    """
+    clear_fullscreen(ordered)
+
     monitors = hypr_json("monitors") or []
     monitor = next((m for m in monitors if m.get("focused")), monitors[0] if monitors else None)
-    # `hyprctl clients` v tomto Hyprlande pole "focused" nemá — bez tohto by sa
-    # po zavretí prehľadu fokus nevrátil oknu, ktoré bolo aktívne pred ním.
-    focused = (hypr_json("activewindow") or {}).get("address")
-
-    # Príznak "busy" drží listener v hyprland.lua ticho, kým presúvame okná —
-    # inak by fokus z prvého presunu hneď prehľad zavrel.
-    state = {
-        "focused": focused if focused in {c["address"] for c in windows} else None,
-        "windows": [
-            {
-                "address": c["address"],
-                "workspace_id": c["workspace"]["id"],
-                "at": c["at"],
-                "size": c["size"],
-                "floating": bool(c["floating"]),
-                "fullscreen": c.get("fullscreen", 0),
-            }
-            for c in windows
-        ],
-    }
-    save_state(dict(state, busy=True))
-
-    for c in windows:
-        move_to_workspace(c["address"], f"special:{SPECIAL}")
-    if not special_visible():
-        toggle_special()
-
     width, height = (monitor["width"], monitor["height"]) if monitor else (1920, 1080)
     origin_x, origin_y = (monitor["x"], monitor["y"]) if monitor else (0, 0)
     area_x, area_y = origin_x + EDGE, origin_y + EDGE
     area_w, area_h = width - EDGE * 2, height - EDGE * 2
-    ordered = [c["address"] for c in sorted(windows, key=lambda c: (c["workspace"]["id"], c["at"][1], c["at"][0]))]
 
     cells, cell_w, cell_h = place_grid(ordered, area_x, area_y, area_w, area_h)
+    debug("layout", len(ordered), "area", area_w, area_h, "cell", cell_w, cell_h)
     for addr in ordered:
         set_floating(addr, True)
         resize_pixel(addr, cell_w, cell_h)
@@ -351,7 +411,8 @@ def open_overview(windows: list[dict]) -> None:
     # nezmenšia. Keď v bunke zostanú väčšie, prekrývajú susedné dlaždice a berú
     # im kliknutia — preto dostanú vlastný stĺpec po pravej strane a ostatné sa
     # poskladajú do zvyšku obrazovky.
-    sizes = {c["address"]: c["size"] for c in clients()}
+    sizes = tile_sizes(ordered)
+    debug("sizes", sizes)
     oversized = [
         addr
         for addr in ordered
@@ -377,9 +438,168 @@ def open_overview(windows: list[dict]) -> None:
             time.sleep(0.25)
             fit_in_cells(cells, cell_w, cell_h)
 
+
+def open_overview(windows: list[dict]) -> None:
+    # `hyprctl clients` v tomto Hyprlande pole "focused" nemá — bez tohto by sa
+    # po zavretí prehľadu fokus nevrátil oknu, ktoré bolo aktívne pred ním.
+    focused = (hypr_json("activewindow") or {}).get("address")
+
+    # Príznak "busy" drží listener v hyprland.lua ticho, kým presúvame okná —
+    # inak by fokus z prvého presunu hneď prehľad zavrel.
+    # Plocha, na ktorú sa majú vrátiť okná otvorené počas prehľadu: ich vlastná
+    # plocha sa už nedá zistiť, na special:exposed hlásia special.
+    origin_workspace = next(
+        (c["workspace"]["id"] for c in windows if c["address"] == focused),
+        windows[0]["workspace"]["id"] if windows else 1,
+    )
+    state = {
+        "focused": focused if focused in {c["address"] for c in windows} else None,
+        "origin_workspace": origin_workspace,
+        "windows": [
+            {
+                "address": c["address"],
+                "workspace_id": c["workspace"]["id"],
+                "at": c["at"],
+                "size": c["size"],
+                "floating": bool(c["floating"]),
+                "fullscreen": c.get("fullscreen", 0),
+            }
+            for c in windows
+        ],
+    }
+    save_state(dict(state, busy=True))
+
+    for c in windows:
+        move_to_workspace(c["address"], f"special:{SPECIAL}")
+    if not special_visible():
+        toggle_special()
+
+    ordered = [c["address"] for c in sorted(windows, key=lambda c: (c["workspace"]["id"], c["at"][1], c["at"][0]))]
+    layout_tiles(ordered)
+
     save_state(state)  # prehľad je hotový, klik na dlaždicu už smie zavrieť
     enter_submap()  # klik vyberie dlaždicu pod kurzorom
     start_click_watcher()
+
+
+def adopt_window(addr: str) -> None:
+    """Priberie okno, ktoré sa otvorilo počas prehľadu, do mriežky.
+
+    Bez toho by zostalo na special:exposed v geometrii, ktorú si vypýtalo, a
+    prekrylo by dlaždice pod sebou.
+    """
+    addr = normalize_address(addr)
+    state = load_state()
+    if not state or state.get("busy") or state.get("closing"):
+        return
+
+    entries = state.setdefault("windows", [])
+    if any(entry["address"] == addr for entry in entries):
+        return
+
+    client = next((c for c in clients() if c["address"] == addr), None)
+    if client is None or workspace_of(client) > 0:
+        return  # už je na normálnej ploche, prehľad sa ho netýka
+
+    entries.append(
+        {
+            "address": addr,
+            "workspace_id": state.get("origin_workspace") or 1,
+            "at": client["at"],
+            "size": client["size"],
+            "floating": False,
+            "fullscreen": client.get("fullscreen", 0),
+        }
+    )
+    # Fokus z nového okna nesmie vyzerať ako klik na dlaždicu.
+    state["busy"] = True
+    state["ignore_activeuntil"] = time.time() + 1.5
+    save_state(state)
+
+    try:
+        move_to_workspace(addr, f"special:{SPECIAL}")
+        layout_tiles([entry["address"] for entry in entries])
+    finally:
+        # busy=True nesmie zostať visieť — prehľad by sa už nedal zavrieť.
+        if STATE.exists():
+            current = load_state() or state
+            current["busy"] = False
+            save_state(current)
+
+
+def finish_overview() -> None:
+    """Posledná dlaždica je preč — prehľad už nemá čo zobrazovať."""
+    if special_visible():
+        toggle_special()
+    STATE.unlink(missing_ok=True)
+    leave_submap()
+
+
+def close_window(addr: str, kill: bool = False) -> None:
+    """Ukončí konkrétne okno signálom.
+
+    `hl.dsp.window.close` je v tomto Hyprlande no-op — aj s parametrom
+    `window`, aj bez neho (overené na bežiacom sedení), a starý
+    `hyprctl dispatch closewindow address:...` sa v Lua configu neparsuje.
+    Preto sa posiela signál: 15 (SIGTERM) ako „zavrieť“ — aplikácia dostane
+    šancu upratať sa — a 9 (SIGKILL) ako „zabiť“.
+    """
+    signal_number = 9 if kill else 15
+    dispatch(f"hl.dsp.window.signal({{ window = {window(addr)}, signal = {signal_number} }})")
+
+
+def order_by_position(entries: list[dict]) -> list[str]:
+    return [e["address"] for e in sorted(entries, key=lambda e: (e["at"][1], e["at"][0]))]
+
+
+def remove_tile(addr: str, kill: bool = False) -> None:
+    """Zavrie (alebo zabije) dlaždicu pod kurzorom a zvyšok preloží."""
+    state = load_state()
+    if not state or state.get("closing"):
+        return
+
+    entries = state.get("windows") or []
+    entry = next((e for e in entries if e["address"] == addr), None)
+    if entry is None:
+        return
+
+    state["windows"] = [e for e in entries if e["address"] != addr]
+    # Zavreté okno odovzdá fokus susedovi; ten event nesmie prehľad zavrieť.
+    state["busy"] = True
+    state["ignore_activeuntil"] = time.time() + 2.0
+    save_state(state)
+
+    close_window(addr, kill=kill)
+    time.sleep(0.3)
+
+    alive = {c["address"] for c in clients()}
+    try:
+        if addr in alive:
+            # Aplikácia sa najprv pýta („uložiť?“) alebo close ignoruje. Okno sa
+            # nesmie nechať na special:exposed bez záznamu — po prehľade by
+            # zostalo visieť na ploche, ktorá sa skryje. Vrátime ho do mriežky.
+            state["windows"] = state.get("windows", []) + [entry]
+            state["busy"] = False
+            save_state(state)
+            layout_tiles(order_by_position(state["windows"]))
+            return
+
+        if not state["windows"]:
+            finish_overview()
+            return
+
+        state["windows"] = [e for e in state["windows"] if e["address"] in alive]
+        state["busy"] = False
+        save_state(state)
+        layout_tiles(order_by_position(state["windows"]))
+    finally:
+        # Aj keď niečo vyššie zlyhá, nesmie zostať busy=True — prehľad by sa
+        # už nikdy nezavrel a watcher by ignoroval kliknutia.
+        if STATE.exists():
+            current = load_state() or {}
+            if current.get("busy"):
+                current["busy"] = False
+                save_state(current)
 
 
 def socket_path() -> Path:
@@ -399,13 +619,51 @@ def start_click_watcher() -> None:
     )
 
 
+def handle_event(line: str) -> bool:
+    """Spracuje jeden event zo socketu; vráti True, keď sa má watcher ukončiť."""
+    state = load_state() or {}
+    if state.get("closing") or state.get("busy"):
+        return False
+
+    # Okno otvorené počas prehľadu patrí do mriežky, nie navrch dlaždíc.
+    if line.startswith("openwindow>>"):
+        addr = normalize_address(line.split(">>", 1)[1].split(",", 1)[0])
+        if len(addr) > 2:
+            subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "--adopt=" + addr],
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        return False
+
+    if not line.startswith("activewindow>>"):
+        return False
+
+    # Pribratie a zatvorenie dlaždice menia fokus samy; ich eventy nie sú klik.
+    if time.time() < float(state.get("ignore_activeuntil") or 0):
+        return False
+
+    time.sleep(0.2)  # nech sa fokus dokončí
+    active = hypr_json("activewindow") or {}
+    if active.get("workspace", {}).get("id", 0) < 0 and STATE.exists():
+        subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--select=" + active.get("address", "")],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    return False
+
+
 def watch_for_click() -> int:
-    """Čaká na fokus z kliknutia na dlaždicu a prehľad zavrie s tým oknom.
+    """Čaká na eventy z Hyprlandu, kým je prehľad otvorený.
 
     Kliknutie na dlaždicu je bežný fokus okna na špeciálnej ploche, takže sa
     nedá rozlíšiť od fokusu, ktorý si pri otváraní spôsobí skript sám — preto
     watcher štartuje až po otvorení, chvíľu mlčí a reaguje len na fokus okna,
-    ktoré je na `special:exposed`.
+    ktoré je na `special:exposed`. `openwindow` pribratie nové okno.
     """
     time.sleep(0.8)  # doznenie presunov z otvárania
     while STATE.exists():
@@ -421,6 +679,7 @@ def watch_for_click() -> int:
             continue
         with connection:
             connection.settimeout(0.5)
+            buffer = ""
             while STATE.exists():
                 try:
                     data = connection.recv(4096)
@@ -430,17 +689,11 @@ def watch_for_click() -> int:
                     break
                 if not data:
                     break
-                if b"activewindow" not in data:
-                    continue
-                time.sleep(0.2)  # nech sa fokus dokončí
-                active = hypr_json("activewindow") or {}
-                if active.get("workspace", {}).get("id", 0) < 0 and STATE.exists():
-                    subprocess.run(
-                        [sys.executable, os.path.abspath(__file__), "--select=" + active.get("address", "")],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    return 0
+                buffer += data.decode(errors="replace")
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if handle_event(line.strip()):
+                        return 0
     return 0
 
 
@@ -453,26 +706,36 @@ def main() -> int:
     selected = next((arg.split("=", 1)[1] for arg in arguments if arg.startswith("--select=")), None)
     pointer = "--pointer" in arguments  # bind ľavého tlačidla v submape
     cancel = "--cancel" in arguments  # ESC v submape
+    close_pointer = "--close-pointer" in arguments  # stredné tlačidlo / Delete
+    kill_pointer = "--kill-pointer" in arguments  # Shift+stredné / Shift+Delete
+    adopt = next((arg.split("=", 1)[1] for arg in arguments if arg.startswith("--adopt=")), None)
     with InstanceLock() as acquired:
         if not acquired:
             return 0  # iné volanie práve beží
 
         state = load_state()
         if state:
-            if cancel:
+            if adopt:
+                adopt_window(adopt)
+            elif cancel:
                 close(state)  # zavrie prehľad a nechá fokus tak, ako bol
             elif pointer:
                 addresses = {entry["address"] for entry in state.get("windows") or []}
                 close(state, selected=window_at_pointer(addresses))
+            elif close_pointer or kill_pointer:
+                addresses = {entry["address"] for entry in state.get("windows") or []}
+                target = window_at_pointer(addresses)
+                if target:
+                    remove_tile(target, kill=kill_pointer)
             else:
                 close(state, select=select, selected=selected)
             return 0
 
         leave_submap()  # po prehľade nesmie zostať mód, v ktorom klávesnica mlčí
-        if pointer or cancel:
-            return 0  # klik alebo ESC mimo prehľadu nemá čo robiť
+        if pointer or cancel or close_pointer or kill_pointer or adopt:
+            return 0  # klik, ESC alebo zavretie mimo prehľadu nemá čo robiť
 
-        windows = [c for c in clients() if c["workspace"]["id"] > 0]  # bez skrytých scratchpadov
+        windows = [c for c in clients() if workspace_of(c) > 0]  # bez skrytých scratchpadov
         if not windows:
             subprocess.run(["notify-send", "-a", "overview", "Prehľad okien", "Na plochách nie sú žiadne okná"])
             return 0
