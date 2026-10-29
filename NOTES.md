@@ -91,3 +91,21 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 
 ### Poznámka k prostrediu
 - Nové okno na tejto session chvíľu hlási `fullscreen 1` (maximized) a po pár sekundách / ďalšom mapovaní to zmizne — nie je to perzistentná window rule (`hyprctl reload` to nezmenil, `alacritty` aj `kitty` sa správajú rovnako). Prehľad to musí tolerovať, čo je teraz súčasťou layout cesty.
+
+## 2026-10-29 (noc) — archivácia oboch zmien, prvé hlavné specy
+
+### Hotovo
+- **Dokumentácia bindov:** `KEYBINDINGS.md` má pod Window Management novú podsekciu *Window overview* — `SUPER` + `grave` rozloží okná, tabuľka siedmich akcií (ľavý klik, stredný klik, `Delete`/`d`, `SHIFT` varianty, `ESC`, `SUPER` + `grave`) a poznámka, že ide o submap `overview` a že `mouse:272`/`mouse:273` sú ľavé/stredné tlačidlo. Sedem jazykových mutácií v `Source/assets/keybinds/` túto sekciu nemá — nechávam ich komunite.
+- **`overview-tile-controls` zarchivovaná** do `openspec/changes/archive/2026-10-29-overview-tile-controls/` (`.openspec.yaml`, proposal, design, tasks aj pôvodná delta). Delty sa zlúčili: `openspec/specs/window-overview/spec.md` — **4 požiadavky, 10 scenárov**, `+4 added`, `## Purpose` skopírovaný z delty (žiadny `TBD` placeholder).
+- **`sync-to-second-machine` zarchivovaná** do `openspec/changes/archive/2026-10-29-sync-to-second-machine/`; `openspec/specs/machine-provisioning/spec.md` — **5 požiadaviek, 11 scenárov**, `+5 added`.
+- **Commity:** `3d448f1` (overview + KEYBINDINGS) a `9a7b9be` (sync), oba pushnuté na `origin/master`.
+
+### Overené
+- `openspec validate --specs --strict` → `✓ machine-provisioning`, `✓ window-overview`, 2 passed / 0 failed. V hlavných specoch nie je žiadna delta hlavička (`## ADDED/MODIFIED/REMOVED/RENAMED`) ani `TBD`.
+- `openspec list` → `No active changes found`; `openspec list --specs` → `machine-provisioning 5 requirements`, `window-overview 4 requirements`.
+- CI: na `3d448f1` aj `9a7b9be` „Fork checks“ success, upstream „Tests“ success (aj job *Shell coverage*), „CI“ skipped (tak je workflow nastavený pre tento fork).
+- Git vidí presun zmeny do archívu ako rename (`R ... (95-100%)`), KEYBINDINGS ako čistý insert `+28`.
+
+### Dôsledok pre ďalšiu zmenu
+- `openspec/specs/` už nie je prázdne, takže ďalšia zmena prehľadu musí ísť cez `## MODIFIED Requirements` s **celým** blokom požiadavky (skopírovaným z hlavného specu), nie cez nové `ADDED` s rovnakým menom.
+- `sync-to-second-machine` je zarchivovaná ešte pred prvým behom na notase. Ak notebook odhalí problém, archív sa dá vrátiť späť (`mv openspec/changes/archive/2026-10-29-sync-to-second-machine openspec/changes/`) a zmena sa doplní ako otvorená.
