@@ -82,26 +82,33 @@ fi
 
 # ---------- waybar ----------
 waybar_pid=$(pgrep -x waybar | head -1)
-bar_line=$(grep 'Bar configured' "$journal_file" | tail -1)
+# Hlášky berieme len z behu aktuálneho procesu. Celý boot obsahuje aj varovania
+# starých configov (iná výška, iný include), takže report by inak hlásil veci,
+# ktoré už dávno opravené sú.
+if [ -n "$waybar_pid" ]; then
+	bar_log=$(grep "waybar\\[$waybar_pid\\]" "$journal_file")
+else
+	bar_log=$(grep 'waybar\[' "$journal_file")
+fi
+bar_line=$(grep 'Bar configured' <<<"$bar_log" | tail -1)
 bar_height_log=$(sed -n 's/.*height: \([0-9]*\).*/\1/p' <<<"$bar_line")
 bar_output=$(sed -n 's/.*for output: //p' <<<"$bar_line")
 bar_height_cfg=$(grep -m1 '"height"' "$waybar_cfg" 2>/dev/null | tr -dc '0-9')
-bar_msgs=$(grep 'waybar\[' "$journal_file" \
-	| grep -E '\[(warning|error)\] ' \
+bar_msgs=$(grep -E '\[(warning|error)\] ' <<<"$bar_log" \
 	| sed -E 's/^.*\[(warning|error)\] //' \
 	| sed -E 's/^module [^:]+: //' \
 	| sort | uniq -c | sort -rn)
-bar_msg_total=$(grep 'waybar\[' "$journal_file" | grep -cE '\[(warning|error)\] ')
+bar_msg_total=$(grep -cE '\[(warning|error)\] ' <<<"$bar_log")
 # Error-level hlášky znamenajú nefunkčný modul (napr. mŕtvy custom/swaync),
 # preto idú do verdiktu. Warningy sú zväčša len chýbajúci hardvér (batéria,
 # podsvietenie) a do verdiktu nevstupujú.
-bar_err_total=$(grep 'waybar\[' "$journal_file" | grep -cE '\[error\] ')
+bar_err_total=$(grep -cE '\[error\] ' <<<"$bar_log")
 # "Requested height: X is less than the minimum height: Y required by the modules"
 # znamená, že sa obsah baru do nakonfigurovanej výšky nevmestí (Waybar si okno
 # potichu zväčší alebo modul oreže) — to je vždy problém, hoci je to len warning.
-bar_fit_warn=$(grep 'waybar\[' "$journal_file" | grep -c 'less than the minimum height')
+bar_fit_warn=$(grep -c 'less than the minimum height' <<<"$bar_log")
 # Opakujúce sa SNI hlášky nie sú problém baru, len hučia v logu.
-bar_sni=$(grep 'waybar\[' "$journal_file" | grep -c 'is already registered')
+bar_sni=$(grep -c 'is already registered' <<<"$bar_log")
 
 # ---------- verdikt ----------
 problems=()
