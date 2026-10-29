@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 import os
-import gi
+import pyutils.python_env as python_env
+
+# gi (PyGObject) je v pyproject.toml len pod voliteľným extra "wayland", takže
+# v spravovanom uv venv nie je, kým ho niečo nenainštaluje. v_import ho doinštaluje
+# pri prvom použití namiesto pádu (#1552).
+python_env.v_import("gi", extra="wayland")
+
+import gi  # noqa: E402
 
 gi.require_version("Playerctl", "2.0")
 from gi.repository import Playerctl, GLib  # noqa: E402

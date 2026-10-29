@@ -7,7 +7,6 @@ hyde.binds.dedup = true
 -- hyde.binds.dedup_fields = {}
 
 -- vars for easy access
-local _apps = hyde.config.app
 local MOD = hyde.config.modifiers.main
 local _F
 
@@ -47,16 +46,20 @@ local togglefloating = function()
     hl.dsp.window.center()()
 end
 
+-- Launch the app through hyde.config.exec, not hl.dsp.exec_cmd(hyde.config.app.*):
+-- this file loads before dynamic.lua merges the user's config.toml, so capturing
+-- the value here would freeze the variables.lua default and silently ignore the
+-- user's own terminal/explorer/browser/editor (#2087).
 _F = {description = "[Launcher|Apps] terminal emulator"}
-hl.bind(MOD .. " + T", hl.dsp.exec_cmd(_apps.terminal), _F)
+hl.bind(MOD .. " + T", hyde.config.exec("app.terminal"), _F)
 _F = {description = "[Launcher|Apps] dropdown terminal"}
 hl.bind(MOD .. " + ALT + T", hl.dsp.exec_cmd("hyde-shell pypr toggle console"), _F)
 _F = {description = "[Launcher|Apps] file explorer"}
-hl.bind(MOD .. " + E", hl.dsp.exec_cmd(_apps.explorer), _F)
+hl.bind(MOD .. " + E", hyde.config.exec("app.explorer"), _F)
 _F = {description = "[Launcher|Apps] browser"}
-hl.bind(MOD .. " + B", hl.dsp.exec_cmd(_apps.browser), _F)
+hl.bind(MOD .. " + B", hyde.config.exec("app.browser"), _F)
 _F = {description = "[Launcher|Apps] text editor"}
-hl.bind(MOD .. " + C", hl.dsp.exec_cmd(_apps.editor), _F)
+hl.bind(MOD .. " + C", hyde.config.exec("app.editor"), _F)
 _F = {description = "[Launcher|Apps] system monitor"}
 hl.bind("CTRL + SHIFT + ESCAPE", hl.dsp.exec_cmd("hyde-shell system.monitor.sh"), _F)
 

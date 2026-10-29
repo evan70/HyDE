@@ -186,15 +186,70 @@ toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-icon-theme-name" "$IC
 toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-cursor-theme-name" "$CURSOR_THEME"
 toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-cursor-theme-size" "$CURSOR_SIZE"
 toml_write "$confDir/gtk-3.0/settings.ini" "Settings" "gtk-font-name" "$GTK3_FONT $GTK3_FONT_SIZE"
+##
+# Zmení confDir/gtk-4.0 na skutočný adresár, v ktorom sú zošymlinkované len
+# súbory témy — namiesto symlinku na celý adresár témy. Pri symlinku na celý
+# adresár zapisuje každý nástroj, ktorý mení ~/.config/gtk-4.0/settings.ini
+# (nwg-look, kde-gtk-config, ...), do kópie témy namiesto používateľovho
+# súboru; GTK 4 si to potom prečíta ako settings.ini témy a kľúč
+# gtk-application-prefer-dark-theme v ňom zacyklí niektoré GTK 4 aplikácie
+# v nekonečnom reloadu (HyDE-Project/HyDE#2200, upstream GNOME/gtk#8478).
+# settings.ini sa preto nikdy nezošymlinkuje, neprepíše ani neodstráni —
+# používateľov skutočný súbor mu pri prepnutí témy ostane.
+#
+# Argumenty:
+#   $1  confDir/gtk-4.0, cieľ (môže byť ešte starý symlink na celý adresár)
+#   $2  themesDir/<téma>/gtk-4.0, zdroj (nemusí existovať)
+##
+link_gtk4_theme() {
+    local confGtk4="$1" themeGtk4="$2" old settings staged f name
+    staged=""
+    if [ -L "$confGtk4" ]; then
+        old="$(readlink -f -- "$confGtk4")"
+        settings="$old/settings.ini"
+        if [ -f "$settings" ] && [ ! -L "$settings" ]; then
+            # settings.ini, ktorý nástroj zapísal do cieľa starého symlinku,
+            # odložíme nabok *pred* zásahom do symlinku: pri zlyhaní kopírovania
+            # tak ostane symlink aj súbor v ňom presne tak, ako boli, namiesto
+            # zlyhaného `mv` po odstránení symlinku, ktoré by súbor nechalo mimo
+            # aktívnej konfigurácie.
+            staged="$(mktemp -- "${confGtk4}.settings.ini.XXXXXX")" || return 1
+            if ! cp -p -- "$settings" "$staged"; then
+                rm -f -- "$staged"
+                print_log -sec "theme" -warn "gtk4" "could not migrate '$settings', keeping the old gtk-4.0 symlink"
+                return 1
+            fi
+        fi
+        if ! rm -f -- "$confGtk4" || ! mkdir -p -- "$confGtk4"; then
+            [ -n "$staged" ] && rm -f -- "$staged"
+            print_log -sec "theme" -warn "gtk4" "could not replace the gtk-4.0 symlink with a real directory"
+            return 1
+        fi
+        [ -n "$staged" ] && mv -- "$staged" "$confGtk4/settings.ini"
+    else
+        mkdir -p -- "$confGtk4"
+    fi
+    # zahoď symlinky z predošlej témy, ktoré nová téma neobsahuje
+    while IFS= read -r -d '' f; do
+        [ "$(basename -- "$f")" = "settings.ini" ] && continue
+        rm -- "$f"
+    done < <(find "$confGtk4" -mindepth 1 -maxdepth 1 -type l -print0)
+    [ -d "$themeGtk4" ] || return 0
+    while IFS= read -r -d '' f; do
+        name="$(basename -- "$f")"
+        [ "$name" = "settings.ini" ] && continue
+        ln -s -- "$f" "$confGtk4/$name"
+    done < <(find -L "$themeGtk4" -mindepth 1 -maxdepth 1 -print0)
+}
+
 if [ -d "$themesDir/$GTK_THEME/gtk-4.0" ]; then
     gtk4Theme="$GTK_THEME"
 else
     gtk4Theme="Wallbash-Gtk"
     print_log -sec "theme" -stat "use" "'Wallbash-Gtk' as gtk4 theme"
 fi
-rm -rf "$confDir/gtk-4.0"
 if [ -d "$themesDir/$gtk4Theme/gtk-4.0" ]; then
-    ln -s "$themesDir/$gtk4Theme/gtk-4.0" "$confDir/gtk-4.0"
+    link_gtk4_theme "$confDir/gtk-4.0" "$themesDir/$gtk4Theme/gtk-4.0"
 else
     print_log -sec "theme" -warn "gtk4" "theme directory '$themesDir/$gtk4Theme/gtk-4.0' does not exist"
 fi
@@ -236,9 +291,6 @@ if [ -f "$HOME/.Xdefaults" ]; then
         -e "/^Xcursor\.size:/c\Xcursor.size: $CURSOR_SIZE" "$HOME/.Xdefaults"
     grep -q "^Xcursor\.theme:" "$HOME/.Xdefaults" || echo "Xcursor.theme: $CURSOR_THEME" >>"$HOME/.Xdefaults"
     grep -q "^Xcursor\.size:" "$HOME/.Xdefaults" || echo "Xcursor.size: $CURSOR_SIZE" >>"$HOME/.Xdefaults"
-fi
-if [ -f "$confDir/gtk-4.0/settings.ini" ]; then
-    rm "$confDir/gtk-4.0/settings.ini"
 fi
 export -f pkg_installed
 if [[ -d "$HYDE_CACHE_HOME/wallpapers/" ]]; then

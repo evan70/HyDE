@@ -24,6 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 
 ### Fixed
+- Keybinds: the app launchers (`SUPER + T/E/B/C`) run the command `config.toml` names at the time the key is pressed, not the one known when the bind was registered. `key_binds.lua` loads before `dynamic.lua` merges the user's `config.toml`, so the binds captured the `variables.lua` defaults and silently ignored an `[app] terminal`/`explorer`/`browser`/`editor` override (#2087)
+- Theme: `~/.config/gtk-4.0` is a real directory with the theme's files linked into it instead of a symlink to the theme's whole directory, so tools such as nwg-look write the user's own `settings.ini` rather than the theme's copy — GTK 4 read that copy back, and a `gtk-application-prefer-dark-theme` key there put some apps into an endless reload loop (#2200, upstream GNOME/gtk#8478). An existing `settings.ini` from the old layout is migrated first and never overwritten, and a failed migration leaves the old symlink in place
+- Media player: `mediaplayer.py` imports `gi` through `python_env.v_import("gi", extra="wayland")` instead of a bare `import gi`. PyGObject is only an optional extra, so `hyde-shell mediaplayer --player spotify` (what `custom-spotify.jsonc` runs) crashed with `No module named 'gi'` in the managed venv (#1552)
+- SDDM: the Candy and Corners themes no longer hardcode an English 12-hour clock in `theme.conf`, so a 24-hour locale gets its own format on the login screen; a blank `HourFormat`/`DateFormat`/`TimeFormat` now falls back to Qt's locale-aware formats, and Corners' `DateTimePanel.qml` gets that fallback too, since a blank format renders as no clock at all
+- Submodules: `language-packs` tracks `main`, the only branch its remote has. `master` left `git submodule update --remote` with nothing to follow
 - Waybar: the layout behind `config.jsonc` pulled the relative `modules/*json*` include, so every start logged `Unable to find resource file`, and the 44 px bar was below the 46 px the modules need after the font bump; the battery and backlight modules are gone from the layout because this desktop has neither
 - SDDM: the Candy theme's QML warnings are silenced in the greeter
 - Hyprlock: `playerctl` errors no longer appear when no media player is running
