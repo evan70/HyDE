@@ -1,0 +1,69 @@
+name: Fork checks
+
+# Kontroly pre tento fork: overia syntax toho, čo v repe meníme (Lua config,
+# Python skripty, shell skripty, JSONC configy). Beží na push do master.
+#
+# Prečo vlastný workflow a nie zabudovaný "Tests": ten si ťahá testy z
+# HyDE-Project/tests:main, ktoré cielia na vetvu dev (napr. očakávajú
+# weather.build_forecast), takže na masteri padajú bez ohľadu na naše zmeny.
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: Syntax checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Lua
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lua5.4
+
+      - name: Shell scripts
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.sh' | xargs -0 -r bash -n
+          # Skripty bez .sh prípony (napr. Configs/.local/bin/hyde-shell) podľa shebangu.
+          # `read` namiesto `$(head -1)` — command substitution inak varuje
+          # na súboroch s nulovým bajtom.
+          status=0
+          while IFS= read -r -d '' file; do
+            IFS= read -r first < "$file" || true
+            case "$first" in
+              *bash*) bash -n "$file" || status=1 ;;
+              *python*) python3 .github/scripts/check_python.py "$file" >/dev/null || status=1 ;;
+            esac
+          done < <(git ls-files -z 'Configs/.local/bin')
+          exit "$status"
+
+      - name: Python syntax
+        # Rovnaké pravidlo ako pri shelli: `ast.parse` nič nezapisuje na disk,
+        # takže pracovný strom zostane čistý.
+        run: |
+          set -euo pipefail
+          # ast.parse nič nezapisuje na disk (na rozdiel od py_compile),
+          # takže pracovný strom zostane čistý.
+          git ls-files -z '*.py' | xargs -0 -r python3 .github/scripts/check_python.py
+
+      - name: Lua configs
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.lua' | xargs -0 -r luac5.4 -p
+          echo "lua: $(git ls-files '*.lua' | wc -l) súborov v poriadku"
+
+      - name: JSON and JSONC configs
+        run: |
+          set -euo pipefail
+          git ls-files -z '*.json' '*.jsonc' | xargs -0 -r python3 .github/scripts/check_jsonc.py
