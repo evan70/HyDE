@@ -26,17 +26,63 @@ git -C ~/HyDE remote set-url origin https://github.com/evan70/HyDE.git
 `AGENTS.md`, `NOTES.md` and the OpenSpec tree live in the checkout, so they arrive with either
 transport; nothing outside `Configs/` has to be copied by hand.
 
+## Account
+
+`machine-setup.sh` starts from a logged-in account and still writes only inside that account's
+`$HOME`; it does not create accounts. The account this desktop expects is checked, and on request
+created, by `Scripts/machine-user.sh`, which runs from the checkout like the other scripts:
+
+```bash
+./Scripts/machine-user.sh --check                 # read-only, changes nothing; default account is hypr
+./Scripts/machine-user.sh --create --name hypr    # only when the check says the account is missing
+```
+
+The check prints every condition it can read and exits non-zero while one is unmet: the account
+exists and is not `root`; `sudo -n` works (the installer needs sudo); `$HOME` exists, belongs to the
+account and is writable by it; the login shell is listed in `/etc/shells`; a password is set (a
+locked account cannot sign in at SDDM); each group in the table; and
+`/usr/share/wayland-sessions/hyprland.desktop` exists.
+
+| Group | Why this desktop needs it |
+| --- | --- |
+| `wheel` | sudo, which `install.sh -i` needs |
+| `video`, `render` | GPU access and DRM for Hyprland |
+| `input` | input devices |
+| `audio` | PipeWire |
+| `storage` | drive mounts through udisks |
+
+A group the distribution does not define at all is reported as a note, not a failure; a group that
+exists but the account lacks is a failure, and the output prints the `usermod` command that fixes
+it.
+
+`--create` creates a missing account with `useradd -m` and those groups, using `/bin/zsh` when
+`/etc/shells` lists it and `/bin/bash` otherwise; the primary group is created with the account
+(`-U`), or reused if a group of the same name already exists. An existing account keeps its name,
+`$HOME` and shell — only missing groups are added, so the command is safe to re-run. The password
+is set only through the interactive `sudo passwd`; without a terminal the script prints that
+command instead of choosing a password, and the check keeps failing until it runs.
+
+The script refuses to run as `root`: its questions are about a user's `$HOME`, session and sudo,
+and the deploy afterwards has to run as that same account. Run it as any account that has sudo and
+name the target with `--name`.
+
+Rollback of a created account: `sudo userdel -r hypr`. Removing one group:
+`sudo gpasswd -d hypr <group>`.
+
 ## Provisioning
 
-Log in as the account that should get the desktop. The script only writes inside that account's
-`$HOME`; an existing account on the machine keeps its own dotfiles. The one system-wide change is
-the SDDM theme, and `install_pst.sh` only writes it when the machine has no HyDE theme configured
-yet — so the login screen is shared, everything else is not.
+Log in as the account that should get the desktop — create it first with the two commands from
+[Account](#account) if the machine has none. The deploy only writes inside that account's `$HOME`;
+an existing account on the machine keeps its own dotfiles. The one system-wide change is the SDDM
+theme, and `install_pst.sh` only writes it when the machine has no HyDE theme configured yet — so
+the login screen is shared, everything else is not.
 
 ```bash
 cd ~/HyDE
-./Scripts/install.sh -i -s   # only on a bare machine: packages, AUR helper, nvidia, shell, system services
-./Scripts/machine-setup.sh   # deploy Configs/, post-install steps, OpenSpec check
+./Scripts/machine-user.sh --check    # account check, read-only; see Account above
+./Scripts/machine-user.sh --create   # only if the check reports the account as missing
+./Scripts/install.sh -i -s           # only on a bare machine: packages, AUR helper, nvidia, shell, system services
+./Scripts/machine-setup.sh           # deploy Configs/, post-install steps, OpenSpec check
 ```
 
 `install.sh -i` is interactive (AUR helper, nvidia, shell) and `machine-setup.sh` inherits the
@@ -79,7 +125,8 @@ Each file is put in one of four buckets:
 | `stale` | the repository no longer has it; the next deploy removes it | no |
 
 The session half checks that Hyprland runs, the Waybar unit is active, the SDDM theme named in
-`/etc/sddm.conf.d/the_hyde_project.conf` exists, and `openspec --version` works.
+`/etc/sddm.conf.d/the_hyde_project.conf` exists, and `openspec --version` works. The account itself
+is not part of `--verify` (it needs no privileges): `Scripts/machine-user.sh --check` covers it.
 
 A failing `deploy` bucket means one of two things. If the repository is newer (the usual case after
 `git pull`), run `./Scripts/machine-setup.sh` to deploy it. If the *live* file is the newer one — a
