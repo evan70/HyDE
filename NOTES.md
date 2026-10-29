@@ -37,3 +37,30 @@ openspec status --change sync-to-second-machine     # 4/4 hotovo, čaká na appl
 openspec instructions apply --change sync-to-second-machine --json
 ```
 Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design → tasks → apply → archive.
+
+## 2026-10-29 (večer) — sync na druhý stroj, apply
+
+### Hotovo
+- **`Scripts/machine-setup.sh`** — deploy (`install.sh -r`, `install_pst.sh`, OpenSpec check) a `--verify`, `--dry-run`. Do `$HOME` iného účtu nesiaha; jediná systémová vec je SDDM téma a `install_pst.sh` ju preskočí, keď už je nastavená (`sddm is already configured`).
+- **`Scripts/machine-setup-verify.py`** — porovnáva live strom s **deez manifestom** (`~/.local/share/deez/dots/*.toml`, `src`/`dst`/`action`). Zistenie: `restore_cfg.psv` je legacy, `install.sh` ho už nevolá — deploy ide výhradne cez deez-dots. Preto verify neporovnáva `git ls-files Configs` (666 súborov, tretina legitímne iná).
+- **Štyri kôpky:** `deploy` (sync, chyba), `user` (preserve, poznámka), `generated` (prepisuje téma/služba, poznámka), `stale` (v repe už nie je, ďalší deploy odstráni). Bez toho by každé prepnutie témy hlásilo 12 „chybných“ súborov.
+- **Dva bugy nájdené live testom:** (1) `install.sh -r` končí otázkou na reboot; s prázdnym stdin `read` zlyhá, `set -e` zhodí úspešný deploy a `install_pst.sh` sa už nespustí — skript preto v termináli odovzdá tty, bez terminálu pošle prázdne riadky („nie / default“). (2) `pgrep -x Hyprland` na vlastnom riadku pod `set -e` zhodil `--verify` skôr, než vypísal session checky; status sa teraz zachytáva cez `||`, takže zlyhanie je `[chyba]` a exit 1.
+- **`SYNC.md`** — clone (bundle ako offline fallback), príkazy, čo znamenajú výpisy, troubleshooting, `NO_MANIFEST`.
+
+### Prenesené do repa (live bolo novšie)
+- `Configs/.config/kitty/kitty.conf` — `font_size 12.5` (HyDE default 9.0).
+- `Configs/.config/swaync/config.json` — control-center margins 8.
+- `Configs/.local/lib/hyde/logoutlaunch.sh` bol naopak novší v repe; deploy ho zosynchronizoval do live.
+
+### Overené na bežiacej session
+- 1. beh: `prepíše sa :: 1` (logoutlaunch.sh), deploy prešiel; 2. beh: `EXIT=0`, nič sa neprepísalo, `git status` bez zmeny, Waybar unit beží.
+- `--verify` dvakrát: `EXIT=0`, žiadny súbor v `~` novší než marker; session checky (Hyprland, `hyde-Hyprland-bar.service`, SDDM Candy, OpenSpec 1.15.0) zelené.
+- Negatívne testy: bez `Configs/` → 1, stub `install.sh` bez `--restore` → 1, zlá voľba → 2, prázdny `HOME` → `NO_MANIFEST` 1, stub `pgrep` → `[chyba] Hyprland` + 1.
+- `--dry-run` s `HOME=/tmp/hyde-home` (a bez `XDG_*`): `EXIT=0`, zapisuje len do temp homu.
+- Lokálne fork checks: shell, Python (57), Lua, JSONC všetko OK; `openspec validate` OK.
+
+### Ešte otvorené
+- **Push** (4.3): CI „fork checks“ + upstream suite zelené až po ňom; remote `evan70/HyDE` je verejný (`git ls-remote` bez credentials vráti `3465f40`), takže notas sa klonuje bez prihlásenia.
+- **Notas:** `git clone https://github.com/evan70/HyDE.git ~/HyDE` → `./Scripts/install.sh -i -s` (na holom stroji) → `./Scripts/machine-setup.sh` → človek: reboot, login, téma, `gh auth login`. Starý účet na notase zostáva nedotknutý (zdieľa len login obrazovku).
+- **Prehľad okien — druhá zmena:** okno otvorené počas prehľadu a kill/close tlačidlo na dlaždici (rozhodnutie layer-shell vs. klávesa v submape `overview`).
+- `sync-to-second-machine` sa po pushi a overení na notase archivuje (`openspec archive`).
