@@ -24,4 +24,4 @@
 
 - [x] 4.1 Dry-run the whole flow against a throwaway `$HOME` (temp dir with a copy of `Configs/`) and verify the script does not depend on this machine's leftovers — `HOME=/tmp/hyde-home ./Scripts/machine-setup.sh --dry-run` exits 0, writes only under the temp home, and `--verify` there reports `NO_MANIFEST`
 - [x] 4.2 Add the changelog entry describing the new entry point and verify it reads without the ticket context
-- [ ] 4.3 Confirm both CI workflows stay green on the push that lands this (fork checks plus the upstream suite) — local fork checks pass; needs the push
+- [x] 4.3 Confirm both CI workflows stay green on the push that lands this (fork checks plus the upstream suite) — `49ee7d0`: Fork checks success, Tests success (27 min, 60/60 cases + coverage)

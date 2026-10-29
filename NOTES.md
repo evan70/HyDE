@@ -59,8 +59,13 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 - `--dry-run` s `HOME=/tmp/hyde-home` (a bez `XDG_*`): `EXIT=0`, zapisuje len do temp homu.
 - Lokálne fork checks: shell, Python (57), Lua, JSONC všetko OK; `openspec validate` OK.
 
+### Stav repa voči upstreamu (2026-10-29)
+- `master` = upstream `HyDE-Project/HyDE:master` + **23 commitov, 0 pozadu** (compare API), 81 súborov.
+- Z upstreamových súborov meníme jediný: `Scripts/install_pst.sh` (+10 riadkov, obnova SDDM témy z `Configs/usr`). Všetko ostatné sú nové súbory (SDDM Candy QML, `openspec/`, `.agents/`, `.github/` fork checks, `AGENTS/NOTES/SYNC.md`, `Scripts/machine-setup*`), takže upstream updaty sa majú kam zlúčiť.
+- Voči `dev`: 24 vpredu / 82 pozadu — zámerne (master + cherry-pick z dev).
+
 ### Ešte otvorené
-- **Push** (4.3): CI „fork checks“ + upstream suite zelené až po ňom; remote `evan70/HyDE` je verejný (`git ls-remote` bez credentials vráti `3465f40`), takže notas sa klonuje bez prihlásenia.
+- **Push** (4.3): hotový — `49ee7d0` je na `origin/master`, „Fork checks“ aj upstream „Tests“ zelené. Remote `evan70/HyDE` je verejný (`git ls-remote` bez credentials), takže notas sa klonuje bez prihlásenia.
 - **Notas:** `git clone https://github.com/evan70/HyDE.git ~/HyDE` → `./Scripts/install.sh -i -s` (na holom stroji) → `./Scripts/machine-setup.sh` → človek: reboot, login, téma, `gh auth login`. Starý účet na notase zostáva nedotknutý (zdieľa len login obrazovku).
 - **Prehľad okien — druhá zmena:** okno otvorené počas prehľadu a kill/close tlačidlo na dlaždici (rozhodnutie layer-shell vs. klávesa v submape `overview`).
 - `sync-to-second-machine` sa po pushi a overení na notase archivuje (`openspec archive`).
