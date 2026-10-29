@@ -16,18 +16,27 @@ sa preto volajú ako Lua výrazy: `hyprctl dispatch 'hl.dsp.window.move({...})'`
 
 from __future__ import annotations
 
+import fcntl
 import json
 import math
 import os
+import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "window-overview" / "state.json"
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "window-overview"
+STATE = STATE_DIR / "state.json"
+LOCK = STATE_DIR / "lock"
 GAP = 12      # medzera medzi dlaždicami
 EDGE = 16     # okraj od hrany monitora
 SPECIAL = "exposed"
+
+
+def debug(*args) -> None:
+    if os.environ.get("OVERVIEW_DEBUG"):
+        print("[overview]", *args, file=sys.stderr, flush=True)
 
 
 def hyprctl(*args: str) -> str:
@@ -109,6 +118,25 @@ def save_state(state: dict) -> None:
     STATE.write_text(json.dumps(state, indent=1))
 
 
+class InstanceLock:
+    """Listener v hyprland.lua môže skript spustiť viackrát za sebou; druhý
+    beh by prepísal stav a okná by zostali rozhádzané."""
+
+    def __enter__(self) -> bool:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        self.handle = LOCK.open("w")
+        try:
+            fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.handle.close()
+            return False
+        return True
+
+    def __exit__(self, *_) -> None:
+        fcntl.flock(self.handle, fcntl.LOCK_UN)
+        self.handle.close()
+
+
 def restore_panes(workspace_id: int, desired: list[dict], alive: set[str]) -> None:
     """Vráti okná do pôvodných panelov.
 
@@ -131,12 +159,25 @@ def restore_panes(workspace_id: int, desired: list[dict], alive: set[str]) -> No
         swap_windows(target["address"], live[index]["address"])
 
 
-def close(state: dict) -> None:
+def close(state: dict, select: bool = False, selected: str | None = None) -> None:
     alive = {c["address"] for c in clients()}
     entries = state.get("windows") or []
     if any("size" not in entry for entry in entries):
         STATE.unlink(missing_ok=True)
         return  # stav z inej verzie skriptu — radšej nič neposúvať
+
+    # Kliknutie na dlaždicu = fokus na to okno. Použijeme ho ako cieľ namiesto
+    # okna, ktoré bolo aktívne pred prehľadom.
+    addresses = {entry["address"] for entry in entries}
+    clicked = None
+    if selected and selected in addresses:
+        clicked = selected
+    elif select and (active := (hypr_json("activewindow") or {})).get("address") in addresses:
+        clicked = active["address"]
+
+    # Príznak pre listener v hyprland.lua: fokusovanie okien pri návrate
+    # nesmie spustiť ďalšie zatváranie.
+    save_state(dict(state, closing=True))
 
     # Dwindle delí panel podľa toho, kde je kurzor, takže rovnaké poradie
     # presunov raz vyjde zrkadlovo prevrátené. Kurzor preto počas obnovy
@@ -170,8 +211,10 @@ def close(state: dict) -> None:
 
     if special_visible():
         toggle_special()
-    if state.get("focused") in alive:
-        focus(state["focused"])
+    target = clicked or state.get("focused")
+    debug("clicked:", clicked, "| nahlaseny fokus:", state.get("focused"), "| ciel:", target)
+    if target in alive:
+        focus(target)
     STATE.unlink(missing_ok=True)
 
 
@@ -180,22 +223,23 @@ def open_overview(windows: list[dict]) -> None:
     monitor = next((m for m in monitors if m.get("focused")), monitors[0] if monitors else None)
     focused = next((c for c in windows if c.get("focused")), None)
 
-    save_state(
-        {
-            "focused": focused["address"] if focused else None,
-            "windows": [
-                {
-                    "address": c["address"],
-                    "workspace_id": c["workspace"]["id"],
-                    "at": c["at"],
-                    "size": c["size"],
-                    "floating": bool(c["floating"]),
-                    "fullscreen": c.get("fullscreen", 0),
-                }
-                for c in windows
-            ],
-        }
-    )
+    # Príznak "busy" drží listener v hyprland.lua ticho, kým presúvame okná —
+    # inak by fokus z prvého presunu hneď prehľad zavrel.
+    state = {
+        "focused": focused["address"] if focused else None,
+        "windows": [
+            {
+                "address": c["address"],
+                "workspace_id": c["workspace"]["id"],
+                "at": c["at"],
+                "size": c["size"],
+                "floating": bool(c["floating"]),
+                "fullscreen": c.get("fullscreen", 0),
+            }
+            for c in windows
+        ],
+    }
+    save_state(dict(state, busy=True))
 
     for c in windows:
         move_to_workspace(c["address"], f"special:{SPECIAL}")
@@ -243,20 +287,95 @@ def open_overview(windows: list[dict]) -> None:
             y += max(0, (cell_h - c["size"][1]) // 2)
         move_pixel(addr, x, y)
 
+    save_state(state)  # prehľad je hotový, klik na dlaždicu už smie zavrieť
+    start_click_watcher()
+
+
+def socket_path() -> Path:
+    return Path(
+        os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    ) / "hypr" / os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "") / ".socket2.sock"
+
+
+def start_click_watcher() -> None:
+    """Pustí sa na pozadí a zavrie prehľad, keď používateľ klikne na dlaždicu."""
+    subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--watch"],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def watch_for_click() -> int:
+    """Čaká na fokus z kliknutia na dlaždicu a prehľad zavrie s tým oknom.
+
+    Kliknutie na dlaždicu je bežný fokus okna na špeciálnej ploche, takže sa
+    nedá rozlíšiť od fokusu, ktorý si pri otváraní spôsobí skript sám — preto
+    watcher štartuje až po otvorení, chvíľu mlčí a reaguje len na fokus okna,
+    ktoré je na `special:exposed`.
+    """
+    time.sleep(0.8)  # doznenie presunov z otvárania
+    while STATE.exists():
+        state = load_state() or {}
+        if state.get("closing") or state.get("busy"):
+            time.sleep(0.3)
+            continue
+        try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.connect(str(socket_path()))
+        except OSError:
+            time.sleep(0.5)
+            continue
+        with connection:
+            connection.settimeout(0.5)
+            while STATE.exists():
+                try:
+                    data = connection.recv(4096)
+                except socket.timeout:
+                    continue
+                except OSError:
+                    break
+                if not data:
+                    break
+                if b"activewindow" not in data:
+                    continue
+                time.sleep(0.2)  # nech sa fokus dokončí
+                active = hypr_json("activewindow") or {}
+                if active.get("workspace", {}).get("id", 0) < 0 and STATE.exists():
+                    subprocess.run(
+                        [sys.executable, os.path.abspath(__file__), "--select=" + active.get("address", "")],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    return 0
+    return 0
+
 
 def main() -> int:
-    state = load_state()
-    if state:
-        close(state)
-        return 0
+    arguments = sys.argv[1:]
+    if "--watch" in arguments:
+        return watch_for_click()
 
-    windows = [c for c in clients() if c["workspace"]["id"] > 0]  # bez skrytých scratchpadov
-    if not windows:
-        subprocess.run(["notify-send", "-a", "overview", "Prehľad okien", "Na plochách nie sú žiadne okná"])
-        return 0
+    select = any(arg.startswith("--select") for arg in arguments)
+    selected = next((arg.split("=", 1)[1] for arg in arguments if arg.startswith("--select=")), None)
+    with InstanceLock() as acquired:
+        if not acquired:
+            return 0  # iné volanie práve beží
 
-    open_overview(windows)
-    return 0
+        state = load_state()
+        if state:
+            close(state, select=select, selected=selected)
+            return 0
+
+        windows = [c for c in clients() if c["workspace"]["id"] > 0]  # bez skrytých scratchpadov
+        if not windows:
+            subprocess.run(["notify-send", "-a", "overview", "Prehľad okien", "Na plochách nie sú žiadne okná"])
+            return 0
+
+        open_overview(windows)
+        return 0
 
 
 if __name__ == "__main__":

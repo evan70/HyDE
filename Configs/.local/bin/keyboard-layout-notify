@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Notifikácia pri prepnutí rozloženia klávesnice.
+
+Hyprland posiela na event socket `activelayout>>zariadenie,Názov rozloženia`
+zakaždým, keď sa zmení skupina — vrátane ALT+SHIFT, ktoré prepína na úrovni
+xkb, takže naň nejde naviazať klávesovú skratku. Tento skript na to počúva
+a zobrazí rovnaké oznámenie, aké dáva HyDE na SUPER + K.
+"""
+
+from __future__ import annotations
+
+import os
+import socket
+import subprocess
+import time
+from pathlib import Path
+
+SOCKET = Path(
+    os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+) / "hypr" / os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "") / ".socket2.sock"
+ICON = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "icons/Wallbash-Icon/keyboard.svg"
+
+DEDUPE = 1.0  # toľko sekúnd ignoruje tú istú zmenu (prepnutie "all" pošle event za každý keyboard)
+
+
+def notify(layout: str) -> None:
+    subprocess.run(
+        ["notify-send", "-a", "HyDE Alert", "-r", "91190", "-t", "800", "-i", str(ICON), layout],
+        check=False,
+    )
+
+
+def listen() -> None:
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.connect(str(SOCKET))
+    last_layout, last_time = "", 0.0
+    buffer = b""
+    with connection:
+        while True:
+            data = connection.recv(4096)
+            if not data:
+                return
+            buffer += data
+            while b"\n" in buffer:
+                raw, buffer = buffer.split(b"\n", 1)
+                line = raw.decode(errors="replace")
+                if not line.startswith("activelayout>>"):
+                    continue
+                layout = line.split(",", 1)[-1].strip()
+                now = time.monotonic()
+                if not layout or (layout == last_layout and now - last_time < DEDUPE):
+                    continue
+                last_layout, last_time = layout, now
+                notify(layout)
+
+
+def main() -> None:
+    while True:
+        try:
+            listen()
+        except (OSError, ConnectionError):
+            pass  # Hyprland ešte nebeží alebo sa reštartoval
+        time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()

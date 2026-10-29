@@ -49,6 +49,7 @@ end
 if hl and hl.on and hl.exec_cmd then
 	hl.on("hyprland.start", function()
 		hl.exec_cmd("sleep 6 && exec $HOME/.local/bin/login-report --quiet")
+		hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/keyboard-layout-notify")
 	end)
 end
 
@@ -57,6 +58,29 @@ end
 if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
 	hl.bind("SUPER + ALT + Delete", hl.dsp.exec_cmd("$HOME/.local/bin/idle-shutdown select"), {
 		description = "[Utilities] shutdown timer after idle",
+	})
+end
+
+-- Rozloženie klávesnice: angličtina + slovenčina (QWERTY), prepínanie
+-- ALT+SHIFT. Prepínanie robí xkb, takže naň nejde naviazať bind — zmenu
+-- preto oznamuje keyboard-layout-notify cez event socket (viď nižšie).
+if hl and hl.config then
+	hl.config({
+		input = {
+			kb_layout = "us,sk",
+			kb_variant = ",qwerty",
+			kb_options = "grp:alt_shift_toggle",
+		},
+	})
+end
+
+-- SUPER + K prepína rozloženie tiež, ale cez HyDE skript, ktorý by pridal
+-- druhé oznámenie k tomu z ALT+SHIFT. Preto ho prepíšeme na tiché prepnutie;
+-- oznámenie dodá keyboard-layout-notify pre obe cesty.
+if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
+	hl.bind("SUPER + K", hl.dsp.exec_cmd("hyprctl switchxkblayout current next"), {
+		description = "[Utilities] toggle keyboard layout",
+		locked = true,
 	})
 end
 
@@ -73,6 +97,11 @@ if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
 		description = "[Window Management] tiled overview of all windows",
 	})
 end
+
+-- Kliknutie na dlaždicu: fokus na okno v prehľade prehľad zavrie a skočí na
+-- to okno. Sleduje to sám skript (`window-overview --watch`), pretože
+-- otváranie prehľadu samo generuje kopu fokus eventov a z Lua by sa to
+-- rozlíšiť nedalo.
 
 -- Alternatívne prepínanie pracovných plôch 1-9 cez ALT.
 -- HyDE má SUPER + 1-9 aj SUPER + KP_1-9; SUPER + číslo však niektoré
