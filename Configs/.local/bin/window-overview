@@ -6,6 +6,13 @@ plochu "exposed" a rozloží ich do mriežky. Druhé volanie ich vráti späť n
 pôvodné plochy vrátane floating geometrie a fullscreenu a fokus dostane to
 okno, ktoré bolo aktívne pred prehľadom.
 
+Kým je prehľad otvorený, drží hyprland.lua submap "overview" s bindom na
+ľavé tlačidlo: klik vyberie okno pod kurzorom (`--pointer`). Bez toho by klik
+na už fokusovanú dlaždicu nespravil nič — fokus sa nemení, takže žiadny event
+nepríde. Okná, ktoré sa pod veľkosť bunky nedajú zmenšiť (Telegram a iné
+appky s vlastnou minimálnou veľkosťou), dostanú vlastný stĺpec po pravej
+strane, aby neprekrývali susedné dlaždice.
+
 Stav sa drží v $XDG_STATE_HOME/window-overview/state.json — bez neho by sa
 okná nedali vrátiť tam, odkiaľ prišli.
 
@@ -32,6 +39,7 @@ LOCK = STATE_DIR / "lock"
 GAP = 12      # medzera medzi dlaždicami
 EDGE = 16     # okraj od hrany monitora
 SPECIAL = "exposed"
+SUBMAP = "overview"  # mód, v ktorom klik vyberá dlaždicu (hyprland.lua)
 
 
 def debug(*args) -> None:
@@ -106,6 +114,75 @@ def area(client: dict) -> int:
     return client["size"][0] * client["size"][1]
 
 
+def submap_available() -> bool:
+    """Submap `overview` definuje hyprland.lua. Do neexistujúceho modu by sme
+    vojsť nemali — klávesnica by v ňom prestala reagovať."""
+    return any(bind.get("submap") == SUBMAP for bind in hypr_json("binds") or [])
+
+
+def enter_submap() -> None:
+    if submap_available():
+        dispatch(f'hl.dsp.submap("{SUBMAP}")')
+
+
+def leave_submap() -> None:
+    dispatch('hl.dsp.submap("reset")')
+
+
+def window_at_pointer(addresses: set[str]) -> str | None:
+    """Vráti dlaždicu pod kurzorom (vrchnú, keď sa prekrývajú)."""
+    point = hypr_json("cursorpos") or {}
+    x, y = point.get("x"), point.get("y")
+    if x is None or y is None:
+        return None
+    hits = [
+        c
+        for c in clients()
+        if c["address"] in addresses
+        and c["at"][0] <= x < c["at"][0] + c["size"][0]
+        and c["at"][1] <= y < c["at"][1] + c["size"][1]
+    ]
+    if not hits:
+        return None
+    hits.sort(key=lambda c: c.get("focusHistoryID", 0))  # 0 = navrchu
+    return hits[0]["address"]
+
+
+def place_grid(addresses: list[str], x: int, y: int, width: int, height: int):
+    """Rozloží adresy do mriežky v zadanom obdĺžniku.
+
+    Počet stĺpcov sa drží pomeru strán, takže dlaždice zostanú skoro štvorcové
+    (na 16:9 tak vyjdú 2 stĺpce pre 1-4 okná). Vráti pozície a veľkosť bunky.
+    """
+    count = max(len(addresses), 1)
+    cols = max(1, min(count, round(math.sqrt(count * width / max(height, 1)))))
+    rows = math.ceil(count / cols)
+    cell_w = (width - GAP * (cols - 1)) // cols
+    cell_h = (height - GAP * (rows - 1)) // rows
+    positions = {}
+    for index, addr in enumerate(addresses):
+        column, row = index % cols, index // cols
+        positions[addr] = (x + column * (cell_w + GAP), y + row * (cell_h + GAP))
+    return positions, cell_w, cell_h
+
+
+def fit_in_cells(cells: dict[str, tuple[int, int]], cell_w: int, cell_h: int) -> None:
+    """Druhý prechod: niektoré okná (Telegram, Electron appky) si po presune na
+    inú plochu ešte raz nastavia vlastnú geometriu. Tie sa dorovnajú na bunku
+    a vycentrujú, aby neprečnievali len na jednu stranu."""
+    for c in clients():
+        addr = c["address"]
+        if addr not in cells:
+            continue
+        x, y = cells[addr]
+        if c["size"] != [cell_w, cell_h]:
+            resize_pixel(addr, cell_w, cell_h)
+            c = next((live for live in clients() if live["address"] == addr), c)
+            x += max(0, (cell_w - c["size"][0]) // 2)
+            y += max(0, (cell_h - c["size"][1]) // 2)
+        move_pixel(addr, x, y)
+
+
 def load_state():
     try:
         return json.loads(STATE.read_text())
@@ -129,10 +206,15 @@ class InstanceLock:
             fcntl.flock(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             self.handle.close()
+            self.handle = None
             return False
         return True
 
     def __exit__(self, *_) -> None:
+        # __exit__ sa volá aj vtedy, keď __enter__ vrátil False (zamknuté
+        # iným behom) — vtedy už je handle zavretý.
+        if self.handle is None:
+            return
         fcntl.flock(self.handle, fcntl.LOCK_UN)
         self.handle.close()
 
@@ -164,6 +246,7 @@ def close(state: dict, select: bool = False, selected: str | None = None) -> Non
     entries = state.get("windows") or []
     if any("size" not in entry for entry in entries):
         STATE.unlink(missing_ok=True)
+        leave_submap()
         return  # stav z inej verzie skriptu — radšej nič neposúvať
 
     # Kliknutie na dlaždicu = fokus na to okno. Použijeme ho ako cieľ namiesto
@@ -216,17 +299,20 @@ def close(state: dict, select: bool = False, selected: str | None = None) -> Non
     if target in alive:
         focus(target)
     STATE.unlink(missing_ok=True)
+    leave_submap()
 
 
 def open_overview(windows: list[dict]) -> None:
     monitors = hypr_json("monitors") or []
     monitor = next((m for m in monitors if m.get("focused")), monitors[0] if monitors else None)
-    focused = next((c for c in windows if c.get("focused")), None)
+    # `hyprctl clients` v tomto Hyprlande pole "focused" nemá — bez tohto by sa
+    # po zavretí prehľadu fokus nevrátil oknu, ktoré bolo aktívne pred ním.
+    focused = (hypr_json("activewindow") or {}).get("address")
 
     # Príznak "busy" drží listener v hyprland.lua ticho, kým presúvame okná —
     # inak by fokus z prvého presunu hneď prehľad zavrel.
     state = {
-        "focused": focused["address"] if focused else None,
+        "focused": focused if focused in {c["address"] for c in windows} else None,
         "windows": [
             {
                 "address": c["address"],
@@ -246,48 +332,53 @@ def open_overview(windows: list[dict]) -> None:
     if not special_visible():
         toggle_special()
 
-    # Mriežka: počet stĺpcov sa drží pomeru monitora, takže dlaždice zostanú
-    # skoro štvorcové (na 16:9 tak vyjdú 2 stĺpce pre 1-4 okná).
-    count = len(windows)
     width, height = (monitor["width"], monitor["height"]) if monitor else (1920, 1080)
     origin_x, origin_y = (monitor["x"], monitor["y"]) if monitor else (0, 0)
-    cols = max(1, min(count, round(math.sqrt(count * width / max(height, 1)))))
-    rows = math.ceil(count / cols)
-    cell_w = (width - EDGE * 2 - GAP * (cols - 1)) // cols
-    cell_h = (height - EDGE * 2 - GAP * (rows - 1)) // rows
+    area_x, area_y = origin_x + EDGE, origin_y + EDGE
+    area_w, area_h = width - EDGE * 2, height - EDGE * 2
+    ordered = [c["address"] for c in sorted(windows, key=lambda c: (c["workspace"]["id"], c["at"][1], c["at"][0]))]
 
-    cells = {}
-    for index, c in enumerate(sorted(windows, key=lambda c: (c["workspace"]["id"], c["at"][1], c["at"][0]))):
-        column, row = index % cols, index // cols
-        cells[c["address"]] = (
-            origin_x + EDGE + column * (cell_w + GAP),
-            origin_y + EDGE + row * (cell_h + GAP),
-        )
-
-    for c in windows:
-        addr = c["address"]
+    cells, cell_w, cell_h = place_grid(ordered, area_x, area_y, area_w, area_h)
+    for addr in ordered:
         set_floating(addr, True)
         resize_pixel(addr, cell_w, cell_h)
         move_pixel(addr, *cells[addr])
 
-    # Druhý prechod: niektoré okná (Telegram, Electron appky) si po presune na
-    # inú plochu ešte raz nastavia vlastnú geometriu a majú vlastné minimálne
-    # rozmery. Tie sa potom vycentrujú v bunke, aby neprečnievali len na jednu
-    # stranu.
     time.sleep(0.25)
-    for c in clients():
-        addr = c["address"]
-        if addr not in cells:
-            continue
-        x, y = cells[addr]
-        if c["size"] != [cell_w, cell_h]:
-            resize_pixel(addr, cell_w, cell_h)
-            c = next((live for live in clients() if live["address"] == addr), c)
-            x += max(0, (cell_w - c["size"][0]) // 2)
-            y += max(0, (cell_h - c["size"][1]) // 2)
-        move_pixel(addr, x, y)
+    fit_in_cells(cells, cell_w, cell_h)
+
+    # Okná, ktoré majú vlastnú minimálnu veľkosť (Telegram), sa pod bunku
+    # nezmenšia. Keď v bunke zostanú väčšie, prekrývajú susedné dlaždice a berú
+    # im kliknutia — preto dostanú vlastný stĺpec po pravej strane a ostatné sa
+    # poskladajú do zvyšku obrazovky.
+    sizes = {c["address"]: c["size"] for c in clients()}
+    oversized = [
+        addr
+        for addr in ordered
+        if sizes.get(addr, [0, 0])[0] > cell_w + 2 or sizes.get(addr, [0, 0])[1] > cell_h + 2
+    ]
+    rest = [addr for addr in ordered if addr not in oversized]
+    if oversized and rest:
+        # Stĺpec dostane najviac polovicu obrazovky, ale keď je okno širšie,
+        # necháme mu toľko, koľko potrebuje — so 320 px pre ostatné dlaždice.
+        cap = max(area_w // 2, area_w - GAP - 320)
+        big_w = min(max(sizes[addr][0] for addr in oversized), cap)
+        rest_w = area_w - big_w - GAP
+        if rest_w >= 4 * EDGE:
+            cells, cell_w, cell_h = place_grid(rest, area_x, area_y, rest_w, area_h)
+            for addr in rest:
+                resize_pixel(addr, cell_w, cell_h)
+                move_pixel(addr, *cells[addr])
+            column_x, offset = area_x + rest_w + GAP, area_y
+            for addr in oversized:
+                cells[addr] = (column_x, offset)
+                move_pixel(addr, column_x, offset)
+                offset += sizes[addr][1] + GAP
+            time.sleep(0.25)
+            fit_in_cells(cells, cell_w, cell_h)
 
     save_state(state)  # prehľad je hotový, klik na dlaždicu už smie zavrieť
+    enter_submap()  # klik vyberie dlaždicu pod kurzorom
     start_click_watcher()
 
 
@@ -360,14 +451,26 @@ def main() -> int:
 
     select = any(arg.startswith("--select") for arg in arguments)
     selected = next((arg.split("=", 1)[1] for arg in arguments if arg.startswith("--select=")), None)
+    pointer = "--pointer" in arguments  # bind ľavého tlačidla v submape
+    cancel = "--cancel" in arguments  # ESC v submape
     with InstanceLock() as acquired:
         if not acquired:
             return 0  # iné volanie práve beží
 
         state = load_state()
         if state:
-            close(state, select=select, selected=selected)
+            if cancel:
+                close(state)  # zavrie prehľad a nechá fokus tak, ako bol
+            elif pointer:
+                addresses = {entry["address"] for entry in state.get("windows") or []}
+                close(state, selected=window_at_pointer(addresses))
+            else:
+                close(state, select=select, selected=selected)
             return 0
+
+        leave_submap()  # po prehľade nesmie zostať mód, v ktorom klávesnica mlčí
+        if pointer or cancel:
+            return 0  # klik alebo ESC mimo prehľadu nemá čo robiť
 
         windows = [c for c in clients() if c["workspace"]["id"] > 0]  # bez skrytých scratchpadov
         if not windows:

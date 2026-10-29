@@ -98,10 +98,25 @@ if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
 	})
 end
 
--- Kliknutie na dlaždicu: fokus na okno v prehľade prehľad zavrie a skočí na
--- to okno. Sleduje to sám skript (`window-overview --watch`), pretože
--- otváranie prehľadu samo generuje kopu fokus eventov a z Lua by sa to
--- rozlíšiť nedalo.
+-- Kliknutie na dlaždicu: okno pod kurzorom dostane fokus a prehľad sa
+-- zavrie. Kým je prehľad otvorený, platí submap "overview" s bindom na ľavé
+-- tlačidlo — klik na už fokusovanú dlaždicu totiž nemení fokus, takže by
+-- žiadny event neprišiel a nič by sa nestalo. ESC a SUPER + ` sú v submape
+-- tiež, aby sa z neho nedalo zaseknúť (submap vypína všetky ostatné klávesy).
+-- Mimo prehľadu je submap neaktívny, takže bežné klikanie ostáva nedotknuté.
+if hl and hl.define_submap and hl.dsp and hl.dsp.exec_cmd then
+	hl.define_submap("overview", "reset", function()
+		hl.bind("mouse:272", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --pointer"), {
+			description = "[Window Management] overview: open the window under the cursor",
+		})
+		hl.bind("ESCAPE", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview --cancel"), {
+			description = "[Window Management] close the overview",
+		})
+		hl.bind("SUPER + grave", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview"), {
+			description = "[Window Management] tiled overview of all windows",
+		})
+	end)
+end
 
 -- Alternatívne prepínanie pracovných plôch 1-9 cez ALT.
 -- HyDE má SUPER + 1-9 aj SUPER + KP_1-9; SUPER + číslo však niektoré
