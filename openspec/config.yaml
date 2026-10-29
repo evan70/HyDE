@@ -1,0 +1,45 @@
+schema: spec-driven
+
+# Project context (optional)
+# Add only constraints that should guide OpenSpec artifacts and workflows.
+# Include constraints an agent cannot infer by reading the code.
+# Keep general project documentation and discoverable codebase facts out.
+context: |
+  This is a personal fork of HyDE (evan70/HyDE) that follows upstream master. It is a
+  Wayland desktop, not an app: Hyprland 0.56 with the Lua config, Waybar, rofi, SDDM,
+  hyprlock/hypridle, installed into ~/.config and ~/.local.
+
+  Constraints that shape every change:
+
+  - Everything shipped lives under Configs/, mirroring $HOME (Configs/.config/...,
+    Configs/.local/..., Configs/usr/share/...). A change is only done when the same file
+    exists in the repository and in its live path under $HOME; the live copies are edited
+    through the repository, never the other way round.
+  - Comments in code and configuration are written in Slovak; commit messages and
+    documentation (README, CHANGELOG) are English like the rest of the history.
+  - The upstream test suite (HyDE-Project/tests:main) targets upstream dev, while this fork
+    is on master. Five of its cases were ported here already (binds, gtk-4.0, mediaplayer
+    gi import, SDDM locale formats, submodule branch); a "failing test" may be that drift,
+    so check the upstream dev branch before changing code to satisfy it.
+  - CI runs .github/workflows/fork-checks.yml (syntax of this tree: shell, Python, Lua,
+    JSONC) and the upstream Tests workflow (full suite plus kcov coverage). Both must pass.
+  - Behaviour is verified on the running session (hyprctl, journalctl, the event socket),
+    not only by the test suite. The SDDM greeter is only reachable through sddm-greeter in
+    test mode, which logs to the journal.
+
+rules:
+  proposal:
+    - Name the live paths under $HOME that change, not only the repository files
+    - State whether the change touches the upstream master/dev drift
+    - Say what is explicitly out of scope
+  design:
+    - Fit HyDE's existing structure (Lua config, shell wrappers, Python helpers in
+      Configs/.local/lib/hyde) instead of introducing new layers or dependencies
+  tasks:
+    - Every task that changes behaviour ends with a verification step on the running session
+
+operations:
+  apply:
+    guidance:
+      - Mirror each changed file into its live path under $HOME and reload the service it belongs to
+      - Run the fork checks locally before pushing (bash -n, luac -p, .github/scripts/check_python.py, .github/scripts/check_jsonc.py)
