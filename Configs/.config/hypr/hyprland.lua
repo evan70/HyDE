@@ -60,6 +60,20 @@ if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
 	})
 end
 
+-- Prehľad okien: SUPER + ` rozloží všetky okná do mriežky na špeciálnom
+-- workspaci "exposed" a druhé stlačenie ich vráti späť (plocha, fokus,
+-- floating aj fullscreen). Je to náhrada hyprexpo — ten je plugin, ktorý sa
+-- musí skompilovať cez hyprpm, a ten v tomto Hyprlande (0.56.2) nie je.
+-- Dwindle pri návrate skladá rozloženie znova, preto skript počas obnovy
+-- pripína kurzor — rovnaké okná tak vrátia vždy rovnaké rozloženie. Výnimka
+-- je plocha, ktorá už pred prehľadom mala zrkadlový tvar (veľký panel vpravo):
+-- prvé zatvorenie ju vráti do štandardného tvaru a ďalej sa už nemení.
+if hl and hl.bind and hl.dsp and hl.dsp.exec_cmd then
+	hl.bind("SUPER + grave", hl.dsp.exec_cmd("$HOME/.local/bin/window-overview"), {
+		description = "[Window Management] tiled overview of all windows",
+	})
+end
+
 -- Alternatívne prepínanie pracovných plôch 1-9 cez ALT.
 -- HyDE má SUPER + 1-9 aj SUPER + KP_1-9; SUPER + číslo však niektoré
 -- vzdialené relácie a hostitelia (VM/SPICE, RDP, macOS) zachytávajú pre seba,

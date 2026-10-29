@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""Tilovaný prehľad okien — náhrada hyprexpo bez pluginov.
+
+Prvé volanie presunie všetky okná z normálnych pracovných plôch na špeciálnu
+plochu "exposed" a rozloží ich do mriežky. Druhé volanie ich vráti späť na
+pôvodné plochy vrátane floating geometrie a fullscreenu a fokus dostane to
+okno, ktoré bolo aktívne pred prehľadom.
+
+Stav sa drží v $XDG_STATE_HOME/window-overview/state.json — bez neho by sa
+okná nedali vrátiť tam, odkiaľ prišli.
+
+Hyprland v HyDE beží na Lua configu, takže starý zápis
+`hyprctl dispatch movetoworkspace ...` skončí chybou parsovania. Dispatchere
+sa preto volajú ako Lua výrazy: `hyprctl dispatch 'hl.dsp.window.move({...})'`.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STATE = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "window-overview" / "state.json"
+GAP = 12      # medzera medzi dlaždicami
+EDGE = 16     # okraj od hrany monitora
+SPECIAL = "exposed"
+
+
+def hyprctl(*args: str) -> str:
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+def hypr_json(name: str):
+    out = hyprctl("-j", name).strip()
+    return json.loads(out) if out else None
+
+
+def clients():
+    return hypr_json("clients") or []
+
+
+def dispatch(expr: str) -> None:
+    hyprctl("dispatch", expr)
+
+
+def window(addr: str) -> str:
+    return f'hl.get_window("address:{addr}")'
+
+
+def move_to_workspace(addr: str, workspace) -> None:
+    dispatch(f"hl.dsp.window.move({{ window = {window(addr)}, workspace = {json.dumps(workspace)}, follow = false }})")
+
+
+def set_floating(addr: str, floating: bool) -> None:
+    action = "set" if floating else "unset"
+    dispatch(f'hl.dsp.window.float({{ window = {window(addr)}, action = "{action}" }})')
+
+
+def move_pixel(addr: str, x: int, y: int) -> None:
+    dispatch(f"hl.dsp.window.move({{ window = {window(addr)}, x = {x}, y = {y}, exact = true }})")
+
+
+def resize_pixel(addr: str, width: int, height: int) -> None:
+    dispatch(f"hl.dsp.window.resize({{ window = {window(addr)}, x = {width}, y = {height}, exact = true }})")
+
+
+def focus(addr: str) -> None:
+    dispatch(f"hl.dsp.focus({{ window = {window(addr)} }})")
+
+
+def fullscreen_state(addr: str, state: int) -> None:
+    dispatch(
+        f"hl.dsp.window.fullscreen_state({{ window = {window(addr)}, internal = {state}, client = {state} }})"
+    )
+
+
+def swap_windows(addr: str, other: str) -> None:
+    dispatch(f"hl.dsp.window.swap({{ window = {window(addr)}, target = {window(other)} }})")
+
+
+def toggle_special() -> None:
+    dispatch(f'hl.dsp.workspace.toggle_special("{SPECIAL}")')
+
+
+def special_visible() -> bool:
+    for monitor in hypr_json("monitors") or []:
+        if monitor.get("focused") and monitor["specialWorkspace"]["name"]:
+            return True
+    return False
+
+
+def area(client: dict) -> int:
+    return client["size"][0] * client["size"][1]
+
+
+def load_state():
+    try:
+        return json.loads(STATE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def save_state(state: dict) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(state, indent=1))
+
+
+def restore_panes(workspace_id: int, desired: list[dict], alive: set[str]) -> None:
+    """Vráti okná do pôvodných panelov.
+
+    Dwindle pri presune okien späť rozloženie poskladá znovu, takže veľký
+    panel skončí pri inom okne. Veľkosť panelu je pritom daná stromom, nie
+    oknom — preto stačí okná poprehadzovať (`swap`), kým každé nesedí na
+    paneli s rovnakou veľkosťou, akú malo pred prehľadom.
+    """
+    targets = sorted(
+        (e for e in desired if e["workspace_id"] == workspace_id and not e["floating"] and e["address"] in alive),
+        key=lambda e: (-(e["size"][0] * e["size"][1]), e["at"][1], e["at"][0]),
+    )
+    for index, target in enumerate(targets):
+        live = sorted(
+            (c for c in clients() if c["workspace"]["id"] == workspace_id and not c["floating"]),
+            key=lambda c: (-area(c), c["at"][1], c["at"][0]),
+        )
+        if index >= len(live) or live[index]["address"] == target["address"]:
+            continue
+        swap_windows(target["address"], live[index]["address"])
+
+
+def close(state: dict) -> None:
+    alive = {c["address"] for c in clients()}
+    entries = state.get("windows") or []
+    if any("size" not in entry for entry in entries):
+        STATE.unlink(missing_ok=True)
+        return  # stav z inej verzie skriptu — radšej nič neposúvať
+
+    # Dwindle delí panel podľa toho, kde je kurzor, takže rovnaké poradie
+    # presunov raz vyjde zrkadlovo prevrátené. Kurzor preto počas obnovy
+    # pripneme do ľavého horného rohu a okná vraciame zľava doprava, zhora
+    # dolu — rozloženie tak vychádza stále rovnako.
+    monitors = hypr_json("monitors") or []
+    monitor = next((m for m in monitors if m.get("focused")), monitors[0] if monitors else None)
+    if monitor:
+        dispatch(f'hl.dsp.cursor.move({{ x = {monitor["x"] + 2}, y = {monitor["y"] + 2} }})')
+
+    for entry in sorted(entries, key=lambda e: (e["workspace_id"], e["at"][1], e["at"][0])):
+        addr = entry["address"]
+        if addr not in alive:
+            continue  # okno medzitým zavreli
+        move_to_workspace(addr, entry["workspace_id"])
+        focus(addr)
+        set_floating(addr, entry["floating"])
+        if entry["floating"]:
+            resize_pixel(addr, *entry["size"])
+            move_pixel(addr, *entry["at"])
+
+    time.sleep(0.3)
+
+    for workspace_id in {entry["workspace_id"] for entry in entries}:
+        restore_panes(workspace_id, entries, alive)
+
+    for entry in entries:
+        if entry["fullscreen"] and entry["address"] in alive:
+            focus(entry["address"])
+            fullscreen_state(entry["address"], entry["fullscreen"])
+
+    if special_visible():
+        toggle_special()
+    if state.get("focused") in alive:
+        focus(state["focused"])
+    STATE.unlink(missing_ok=True)
+
+
+def open_overview(windows: list[dict]) -> None:
+    monitors = hypr_json("monitors") or []
+    monitor = next((m for m in monitors if m.get("focused")), monitors[0] if monitors else None)
+    focused = next((c for c in windows if c.get("focused")), None)
+
+    save_state(
+        {
+            "focused": focused["address"] if focused else None,
+            "windows": [
+                {
+                    "address": c["address"],
+                    "workspace_id": c["workspace"]["id"],
+                    "at": c["at"],
+                    "size": c["size"],
+                    "floating": bool(c["floating"]),
+                    "fullscreen": c.get("fullscreen", 0),
+                }
+                for c in windows
+            ],
+        }
+    )
+
+    for c in windows:
+        move_to_workspace(c["address"], f"special:{SPECIAL}")
+    if not special_visible():
+        toggle_special()
+
+    # Mriežka: počet stĺpcov sa drží pomeru monitora, takže dlaždice zostanú
+    # skoro štvorcové (na 16:9 tak vyjdú 2 stĺpce pre 1-4 okná).
+    count = len(windows)
+    width, height = (monitor["width"], monitor["height"]) if monitor else (1920, 1080)
+    origin_x, origin_y = (monitor["x"], monitor["y"]) if monitor else (0, 0)
+    cols = max(1, min(count, round(math.sqrt(count * width / max(height, 1)))))
+    rows = math.ceil(count / cols)
+    cell_w = (width - EDGE * 2 - GAP * (cols - 1)) // cols
+    cell_h = (height - EDGE * 2 - GAP * (rows - 1)) // rows
+
+    cells = {}
+    for index, c in enumerate(sorted(windows, key=lambda c: (c["workspace"]["id"], c["at"][1], c["at"][0]))):
+        column, row = index % cols, index // cols
+        cells[c["address"]] = (
+            origin_x + EDGE + column * (cell_w + GAP),
+            origin_y + EDGE + row * (cell_h + GAP),
+        )
+
+    for c in windows:
+        addr = c["address"]
+        set_floating(addr, True)
+        resize_pixel(addr, cell_w, cell_h)
+        move_pixel(addr, *cells[addr])
+
+    # Druhý prechod: niektoré okná (Telegram, Electron appky) si po presune na
+    # inú plochu ešte raz nastavia vlastnú geometriu a majú vlastné minimálne
+    # rozmery. Tie sa potom vycentrujú v bunke, aby neprečnievali len na jednu
+    # stranu.
+    time.sleep(0.25)
+    for c in clients():
+        addr = c["address"]
+        if addr not in cells:
+            continue
+        x, y = cells[addr]
+        if c["size"] != [cell_w, cell_h]:
+            resize_pixel(addr, cell_w, cell_h)
+            c = next((live for live in clients() if live["address"] == addr), c)
+            x += max(0, (cell_w - c["size"][0]) // 2)
+            y += max(0, (cell_h - c["size"][1]) // 2)
+        move_pixel(addr, x, y)
+
+
+def main() -> int:
+    state = load_state()
+    if state:
+        close(state)
+        return 0
+
+    windows = [c for c in clients() if c["workspace"]["id"] > 0]  # bez skrytých scratchpadov
+    if not windows:
+        subprocess.run(["notify-send", "-a", "overview", "Prehľad okien", "Na plochách nie sú žiadne okná"])
+        return 0
+
+    open_overview(windows)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
