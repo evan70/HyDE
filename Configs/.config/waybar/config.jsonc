@@ -2,15 +2,14 @@
   "layer": "top",
   "output": ["*"],
   "position": "top",
-  "height": 44,
+  "height": 46,
   "mode": "dock",
   "exclusive": true,
   "passthrough": false,
   "reload_style_on_change": true,
   "include": [
-    // "modules/*json*", // Vypnuté: tento adresár tu neexistuje (moduly sú v $XDG_DATA_HOME/waybar/modules), Waybar inak loguje "Unable to find resource file".
-    "$XDG_DATA_HOME/waybar/modules/*json*" // Also support waybar-git's data modules.
-    // "$XDG_CONFIG_HOME/waybar/includes/includes.json" // Deprecated on newer Waybar releases.
+    // "modules/*json*", // Vypnuté: adresár ~/.config/waybar/modules neexistuje, Waybar inak loguje "Unable to find resource file".
+    "$XDG_DATA_HOME/waybar/modules/*json*" // Moduly sú tu (waybar-git ich sem inštaluje).
   ],
   // ? Groups per side
   "modules-left": ["group/leaf-inverse"],
@@ -43,14 +42,12 @@
     "orientation": "inherit",
     "modules": [
       "privacy",
-      "backlight",
       "tray",
       "network#bandwidthUpBytes",
       "network#bandwidthDownBytes",
-      "custom/bluetooth",
+      "bluetooth",
       "pulseaudio",
       "pulseaudio#microphone",
-      "battery",
       "power-profiles-daemon",
       "custom/gpuinfo",
       "custom/cpuinfo",
