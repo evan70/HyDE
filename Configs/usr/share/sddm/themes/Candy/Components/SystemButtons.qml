@@ -69,7 +69,10 @@ RowLayout {
             // exposedSession sa plní cez LoginForm/Input; kým nie je, musí to byť
             // null a nie undefined, inak QML loguje "Unable to assign [undefined]".
             KeyNavigation.up: exposedSession ? exposedSession : null
-            KeyNavigation.left: index > 0 ? parent.children[index-1] : null
+            // Pri vytváraní delegátov ešte predchádzajúci button nemusí existovať;
+            // `children[index-1]` je potom undefined a QML loguje
+            // "Unable to assign [undefined] to QQuickItem*". Preto kontrola.
+            KeyNavigation.left: index > 0 && parent.children[index-1] ? parent.children[index-1] : null
 
             states: [
                 State {

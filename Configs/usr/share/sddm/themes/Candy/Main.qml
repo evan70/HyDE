@@ -45,7 +45,9 @@ Pane {
     palette.window: config.BackgroundColor
 
     font.family: config.Font
-    font.pointSize: config.FontSize !== "" ? config.FontSize : parseInt(height / 80)
+    // Počas prvého layoutu je height 0, takže by font vyšiel 0 a Qt by logoval
+    // "QFont::setPointSizeF: Point size <= 0". Preto aspoň 1.
+    font.pointSize: config.FontSize !== "" ? config.FontSize : Math.max(1, Math.round(height / 80))
     focus: true
 
     property bool leftleft: config.HaveFormBackground == "true" &&

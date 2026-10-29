@@ -560,10 +560,12 @@ Column {
         loginButtonWidth: loginButton.background.width
     }
 
+    // Qt 6 očakáva v Connections deklaráciu funkcií; starý `onFoo:` zápis je
+    // deprecated a pri každom vytvorení loguje varovanie.
     Connections {
         target: sddm
-        onLoginSucceeded: {}
-        onLoginFailed: {
+        function onLoginSucceeded() {}
+        function onLoginFailed() {
             failed = true
             resetError.running ? resetError.stop() && resetError.start() : resetError.start()
         }
