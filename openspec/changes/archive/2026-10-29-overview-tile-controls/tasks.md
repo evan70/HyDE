@@ -30,6 +30,6 @@
 ## 4. Housekeeping
 
 - [x] 4.1 Document the new binds in `CHANGELOG.md` and next to the submap in `hyprland.lua`
-      — `CHANGELOG.md`: nové riadky v `Added` (stredné tlačidlo, `Delete`/`d`, Shift varianty, pribratie okna) a vo `Fixed` (fullscreen dlaždica, `float` prepína namiesto nastavenia); komentár pri submape v `hyprland.lua` popisuje obe vetvy a správanie poslednej dlaždice
+      — `CHANGELOG.md`: nové riadky v `Added` (stredné tlačidlo, `Delete`/`d`, Shift varianty, pribratie okna) a vo `Fixed` (fullscreen dlaždica, `float` prepína namiesto nastavenia); komentár pri submape v `hyprland.lua` popisuje obe vetvy a správanie poslednej dlaždice; `KEYBINDINGS.md` má pod Window Management novú podsekciu Window overview s tabuľkou všetkých siedmich akcií vrátane Shift variantov (overené strojovo: 9 riadkov tabuľky, všetky s tromi oddeľovačmi)
 - [x] 4.2 Run the fork checks and the upstream suite, and mirror both changed files to their live paths
       — `Configs/.local/bin/window-overview` a `Configs/.config/hypr/hyprland.lua` sú zhodné s `~/.local/bin/window-overview` a `~/.config/hypr/hyprland.lua` (`diff -q`), session používa nové bindy bez `hyprctl reload`; fork checks a suite: viď nižšie

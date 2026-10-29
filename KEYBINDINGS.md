@@ -76,6 +76,34 @@ Here are all HyDE specific keybindings listed.
 | <kbd>SUPER</kbd> + <kbd>CTRL</kbd> + <kbd>B</kbd>    | toggle waybar                |
 | <kbd>SUPER</kbd> + <kbd>J</kbd>                      | toggle split                 |
 
+### Window overview
+
+<kbd>SUPER</kbd> + <kbd>`</kbd> tiles every window into a grid on the focused
+monitor. Pressing it again or <kbd>ESC</kbd> puts the windows back on the
+workspaces they came from, with the floating geometry and fullscreen state they
+had before.
+
+While the overview is open, a submap takes over the keyboard, so only these
+bindings are live. The pointer is the selector — click a tile to pick it.
+
+| Keys                                                                    | Action                               |
+| :---------------------------------------------------------------------- | :----------------------------------- |
+| <kbd>Left click</kbd>                                                   | focus it and close the overview      |
+| <kbd>Middle click</kbd>                                                 | close the window under the cursor    |
+| <kbd>Delete</kbd> or <kbd>d</kbd>                                       | close the window under the cursor    |
+| <kbd>SHIFT</kbd> + <kbd>Middle click</kbd>                              | kill the window under the cursor     |
+| <kbd>SHIFT</kbd> + <kbd>Delete</kbd> or <kbd>SHIFT</kbd> + <kbd>d</kbd> | kill the window under the cursor     |
+| <kbd>ESC</kbd>                                                          | close the overview, keep the windows |
+| <kbd>SUPER</kbd> + <kbd>`</kbd>                                         | close the overview, keep the windows |
+
+Closing a tile leaves the overview open and reflows the remaining tiles; closing
+the last one closes the overview. A window that opens while the overview is open
+joins the grid instead of covering it, and returns to the workspace that was
+active when the overview was opened.
+
+In Hyprland's own naming the pointer buttons are `mouse:272` (left) and
+`mouse:273` (middle).
+
 ### Group Navigation
 
 | Keys                                              | Action                        |
