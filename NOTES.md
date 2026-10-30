@@ -109,3 +109,27 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 ### Dôsledok pre ďalšiu zmenu
 - `openspec/specs/` už nie je prázdne, takže ďalšia zmena prehľadu musí ísť cez `## MODIFIED Requirements` s **celým** blokom požiadavky (skopírovaným z hlavného specu), nie cez nové `ADDED` s rovnakým menom.
 - `sync-to-second-machine` je zarchivovaná ešte pred prvým behom na notase. Ak notebook odhalí problém, archív sa dá vrátiť späť (`mv openspec/changes/archive/2026-10-29-sync-to-second-machine openspec/changes/`) a zmena sa doplní ako otvorená.
+
+## 2026-10-29 (noc) — účet pre notas: `machine-user-account`
+
+### Hotovo
+- **Skript na účet dovtedy nebol.** `grep -rn 'useradd|adduser'` nenašiel v strome nič a `machine-setup.sh` začína až pri prihlásenom účte, takže `hypr` s `wheel/video/render/input/audio/storage` a `/bin/zsh` existoval len v pamäti tohto stroja. Vznikla zmena `machine-user-account` (proposal, design, delta s 3 požiadavkami a 8 scenármi, 11 taskov).
+- **`Scripts/machine-user.sh`** (414 riadkov, komentáre po slovensky, `print_log` a `shell_listed` z `global_fn.sh`): `--check` je default a nič nemení, `--create`, `--name` (default `hypr`), `-h`; exit 0/1/2; ako root odmietne bežať. Kontrola má 14 riadkov: účet existuje, nie je root, `sudo -n`, domov (existuje, vlastník, právo zápisu), shell v `/etc/shells`, heslo cez `passwd -S` (P/L/NP), šesť skupín, `hyprland.desktop`. `--create` volá `useradd -m` s primárnou skupinou, `-G` a shellom (`zsh` ak je v `/etc/shells`, inak `bash` + poznámka); existujúcemu účtu doplní len chýbajúce skupiny a shell nemení; heslo ide výhradne cez interaktívne `sudo passwd`, bez terminálu sa vypíše príkaz.
+- **Bug s IFS (idempotencia bola falošná):** `local IFS=,` v `ensure_groups` prechádzal aj do procesnej substitúcie `mapfile -t missing < <(missing_groups)`, kde `for grp in $(id -nG …)` delil už len podľa čiarok — každý druhý beh preto "doplnil" všetkých šesť skupín. Riešenie: `join_by_commas` (IFS len v pomocníkovi) a `local IFS=$' \t\n'` v `has_group`.
+- **Druhá diera pri implementácii:** `useradd -m -U` zlyhá, ak po starom účte zostala skupina rovnakého mena; skript preto vtedy použije `-g <meno>` a riziko v `design.md` je prepísané, aby sedelo s realitou.
+- **`SYNC.md`:** nová sekcia `## Account` (tabuľka skupín s dôvodmi, pravidlo "skupina na systéme nie je = poznámka, chýbajúce členstvo = chyba", root refusal, rollback `userdel -r` / `gpasswd -d`), poradie check → create → `install.sh -i -s` → `machine-setup.sh` a poznámka, že `--verify` účet nekontroluje.
+- **`CHANGELOG.md`:** jeden riadok `Account:` v `## Unreleased → ### Added`.
+- **Commit `510bd3e`** pushnutý na `origin/master`.
+
+### Overené
+- `hypr`: 14× `[ok]` a exit 0; `--name hyde-nope`: 13× `[chyba]` (účet + 12 závislých) a exit 1; `sudo ./Scripts/machine-user.sh`: exit 1; `--bogus`, `--name` bez hodnoty, zlé meno aj dve mená: exit 2 s usage na stderr.
+- Throwaway účty `hyde-acct-test` (holý `useradd -m`), `hyde-acct-new`, `hyde-acct-new3` a `hyde-acct-new4` (ten so skupinou rovnakého mena): skupiny aj shell sedia, `passwd -S` = `L`, druhý beh `[ok] skupiny sedia`, po `gpasswd -d … video` doplnené len `video`, účet s `/usr/bin/bash` si shell nechal a dostal `chsh` hint.
+- `diff` snapshotov (`getent passwd`, `id -nG hypr` / `nobody` / testovací účet, `ls -la /home`) okolo dvoch behov prázdny; všetky testovacie účty aj skupina zmazané, `/home` má len `ai-agent`, `evan`, `hypr`.
+- Negatívne cesty: domov vlastnený rootom → `[chyba]`; temp kópia s `hyde_nogroup` → poznámka, do chýb sa nepočítala; temp kópia s neexistujúcou SDDM session → `[chyba]`.
+- Testy sa opierali o passwordless sudo na tomto stroji (`sudo -n true` prechádza), takže `useradd`/`usermod`/`userdel` išli bez pýtania hesla.
+- Lokálne: `bash -n` OK, Python 57/0, `luac5.4 -p` OK, JSONC 143/0, `openspec validate machine-user-account --strict` valid.
+- CI na `510bd3e`: Fork checks success, Tests success (aj *Shell coverage*), CI skipped (tak je workflow nastavený).
+
+### Ešte otvorené
+- Zmena je hotová a CI zelené, ale **nie je zarchivovaná**: `openspec archive machine-user-account` zlúči 3 nové požiadavky do `openspec/specs/machine-provisioning/spec.md` (5 → 8 požiadaviek).
+- Celý postup z `SYNC.md` ešte neprešiel na notase; skript je overený len tu, na throwaway účtoch, ktoré zase zmizli.

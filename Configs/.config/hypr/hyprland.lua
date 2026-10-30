@@ -50,6 +50,20 @@ if hl and hl.on and hl.exec_cmd then
 	hl.on("hyprland.start", function()
 		hl.exec_cmd("sleep 6 && exec $HOME/.local/bin/login-report --quiet")
 		hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/keyboard-layout-notify")
+		-- Relácia: watch si počas sedenia drží zoznam okien a restore ich po
+		-- prihlásení vráti na pôvodné plochy. Skript sa dá kedykoľvek vypnúť
+		-- cez `session-restore off` (aj stav zmazať cez `session-restore forget`).
+		hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/session-restore restore")
+		hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/session-restore watch")
+	end)
+end
+
+-- Snímka pre ďalšie prihlásenie sa robí tu, kým okná ešte existujú. HyDE pri
+-- odhlásení spúšťa `uwsm stop`, takže bez toho by posledné eventy `closewindow`
+-- prepísali uložený stav prázdnym zoznamom a obnovilo by sa nič.
+if hl and hl.on and hl.exec_cmd then
+	hl.on("hyprland.shutdown", function()
+		hl.exec_cmd(os.getenv("HOME") .. "/.local/bin/session-restore seal")
 	end)
 end
 

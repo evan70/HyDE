@@ -1,0 +1,614 @@
+#!/usr/bin/env python3
+"""Obnovenie relácie — po prihlásení sa vrátia okná z posledného sedenia.
+
+Hyprland session restore nevie: po odhlásení sú okná preč a pri ďalšom
+prihlásení sa otvorí len to, čo spúšťa HyDE. Tento skript si preto počas
+sedenia drží zoznam okien (presný príkaz z /proc, plocha, floating poloha)
+a po štarte ich znovu otvorí na pôvodných plochách.
+
+Dva súbory, aby odhlásenie nezmazalo to, čo sa má obnoviť:
+
+  state.json  živý stav, prepisuje ho `watch` pri každej zmene okien
+  last.json   snímka spravená pri odhlásení (`seal`); obnova ju má prednosť
+
+Bez `last.json` by pri odhlásení posledné eventy `closewindow` prepísali stav
+prázdnym zoznamom a po prihlásení by sa neobnovilo nič. `seal` sa preto volá
+z `hyprland.shutdown`, keď okná ešte existujú, a spája živý stav s tým
+uloženým — keby `uwsm stop` stihol časť aplikácií zavrieť skôr.
+
+Režimy:
+    watch     sleduje event socket a ukladá stav (štart z hyprland.lua)
+    restore   otvorí uložené okná na ich plochách (štart z hyprland.lua)
+    seal      snímka pre ďalšie prihlásenie (hyprland.shutdown)
+    save      uloží stav hneď, aj pre ďalšie prihlásenie
+    list      vypíše, čo je uložené
+    forget    zmaže uložený stav (ďalšie prihlásenie bude čisté)
+    off | on  vypne / zapne ukladanie aj obnovu
+    status    stav uloženia a či watch beží (default)
+
+Aplikácie sa spúšťajú presne tak, ako bežali (cmdline z /proc), nie cez
+desktop entry — to je jediné, čo sedí aj pre flatpak aj pre Electron. Okná
+na špeciálnych plochách (prehľad okien) sa neukladajú.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import select
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+import traceback
+from pathlib import Path
+
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "session-restore"
+STATE = STATE_DIR / "state.json"   # živý stav (watch)
+LAST = STATE_DIR / "last.json"     # snímka pri odhlásení (seal), z nej sa obnovuje
+DISABLED = STATE_DIR / "disabled"
+RESTORED = STATE_DIR / "restored"          # podpis session, ktorá už obnovu spravila
+WATCH_LOCK = STATE_DIR / "watch.lock"      # jediný watch
+RESTORE_LOCK = STATE_DIR / "restore.lock"  # jediná obnova naraz
+LOG = STATE_DIR / "last.log"
+
+SETTLE = 2.0         # koľko restore počká, kým sa session rozbehne
+WINDOW_WAIT = 4.0    # koľko čaká na okno jednej aplikácie
+TOTAL_BUDGET = 45.0  # strop pre celú obnovu
+DEBOUNCE = 0.7       # watch: ako dlho zlúči sériu eventov pred uložením
+
+# Eventy, po ktorých sa stav ukladá. Fullscreen, titulok a fokus sa neukladajú.
+EVENTS = {"openwindow", "closewindow", "movewindow", "movewindowv2", "changefloatingmode"}
+
+USAGE = __doc__.split("Režimy:")[1].split("Aplikácie")[0].strip()
+
+
+# ---------- pomocníci ----------
+
+def reset_log() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    LOG.write_text("")
+
+
+def log(message: str) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG.open("a") as handle:
+        handle.write(f"{time.strftime('%H:%M:%S')} {message}\n")
+
+
+def hyprctl(*args: str) -> str:
+    return subprocess.run(["hyprctl", *args], capture_output=True, text=True).stdout
+
+
+def hypr_json(name: str):
+    out = hyprctl("-j", name).strip()
+    if not out:
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        return None
+
+
+def clients() -> list:
+    return hypr_json("clients") or []
+
+
+def windows_list() -> dict:
+    """Adresy okien, ktoré v tejto chvíli existujú."""
+    return {client.get("address"): client for client in clients() if client.get("address")}
+
+
+def write_json(path: Path, data) -> None:
+    """Zápis cez dočasný súbor, aby stav nikdy neostal v polovici.
+
+    Dočasné meno je unikátne pre proces: `watch`, `save` a `seal` môžu písať
+    naraz a so spoločným menom si jeden druhému `os.replace`-li súbor spod rúk
+    (`FileNotFoundError` na `state.tmp`).
+    """
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n")
+    os.replace(tmp, path)
+
+
+def load_json(path: Path):
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def disabled() -> bool:
+    return DISABLED.exists()
+
+
+def workspace_key(name) -> int:
+    """Číselné plochy idú v poradí; pomenované (misc:named) na koniec."""
+    try:
+        return int(name)
+    except (TypeError, ValueError):
+        return 10_000
+
+
+# ---------- ukladanie ----------
+
+def read_cmdline(pid: int) -> list:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return []
+    return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+
+
+def read_cwd(pid: int) -> str:
+    """Pracovný adresár okna — bez neho by sa terminál otvoril v inom priečinku."""
+    try:
+        return os.readlink(f"/proc/{pid}/cwd")
+    except OSError:
+        return ""
+
+
+def snapshot() -> dict:
+    windows = []
+    for client in clients():
+        if not client.get("mapped", True):
+            continue
+        space = client.get("workspace") or {}
+        name = str(space.get("name") or space.get("id") or "")
+        ident = space.get("id")
+        # Špeciálne plochy (prehľad okien, scratchpad) sa neobnovujú — okno by
+        # po štarte skončilo na ploche, ktorú nie je vidieť.
+        if not name or name.startswith("special:") or (isinstance(ident, int) and ident < 0):
+            continue
+        pid = int(client.get("pid") or 0)
+        cmd = read_cmdline(pid)
+        if not cmd:
+            continue
+        windows.append(
+            {
+                "cmd": cmd,
+                "cwd": read_cwd(pid),
+                "class": client.get("class") or "",
+                "initial_class": client.get("initialClass") or client.get("class") or "",
+                "workspace": name,
+                "floating": bool(client.get("floating")),
+                "at": client.get("at"),
+                "size": client.get("size"),
+            }
+        )
+    windows.sort(key=lambda entry: (workspace_key(entry["workspace"]), entry["class"].lower()))
+    return {"saved": time.time(), "windows": windows}
+
+
+def save_live() -> None:
+    if disabled():
+        return
+    write_json(STATE, snapshot())
+
+
+def merge(live: list, previous: list) -> list:
+    """Živé okná + tie z uloženého stavu, ktoré už medzitým zmizli.
+
+    Pri odhlásení môže `uwsm stop` zavrieť časť aplikácií skôr, než sa stihne
+    spraviť snímka; vtedy chýbajúce okná doplní posledný živý stav.
+    """
+    merged = list(live)
+    seen = {(tuple(entry["cmd"]), entry.get("workspace", "1")) for entry in merged}
+    for entry in previous:
+        if not entry.get("cmd"):
+            continue
+        key = (tuple(entry["cmd"]), entry.get("workspace", "1"))
+        if key not in seen:
+            merged.append(entry)
+            seen.add(key)
+    merged.sort(key=lambda entry: (workspace_key(entry["workspace"]), entry["class"].lower()))
+    return merged
+
+
+def seal() -> int:
+    if disabled():
+        log("uloženie vypnuté (session-restore on)")
+        return 0
+    previous = (load_json(STATE) or {}).get("windows") or []
+    windows = merge(snapshot()["windows"], previous)
+    if not windows:
+        write_json(LAST, {"saved": time.time(), "windows": []})
+        log("žiadne okno na uloženie")
+        return 0
+    write_json(LAST, {"saved": time.time(), "windows": windows})
+    log(f"uložených okien: {len(windows)}")
+    return 0
+
+
+def save() -> int:
+    reset_log()
+    if disabled():
+        log("uloženie vypnuté (session-restore on)")
+        return 0
+    state = snapshot()
+    write_json(STATE, state)
+    write_json(LAST, state)
+    log(f"uložených okien: {len(state['windows'])}")
+    return 0
+
+
+# ---------- obnova ----------
+
+def dispatch(expr: str) -> None:
+    hyprctl("dispatch", expr)
+
+
+def window_ref(addr: str) -> str:
+    return f'hl.get_window("address:{addr}")'
+
+
+def move_to_workspace(addr: str, workspace: str) -> None:
+    dispatch(f"hl.dsp.window.move({{ window = {window_ref(addr)}, workspace = {json.dumps(workspace)}, follow = false }})")
+
+
+def set_floating(addr: str) -> None:
+    """Odplaví okno len ak ešte nepláva.
+
+    `hl.dsp.window.float` v tomto Hyprlande parameter `action` ignoruje a vždy
+    prepína (rovnako ako v window-overview), takže slepé volanie by tiled okno
+    odplavilo.
+    """
+    live = next((c for c in clients() if c.get("address") == addr), None)
+    if live is not None and not live.get("floating"):
+        dispatch(f"hl.dsp.window.float({{ window = {window_ref(addr)} }})")
+
+
+def clear_fullscreen(addr: str, timeout: float = 2.5) -> bool:
+    """Zruší fullscreen, kým okno nehlási 0.
+
+    Nové okno v tomto Hyprlande chvíľu hlási `fullscreen 1` (maximized) a kým to
+    nezmizne, `move` aj `resize` skončia na `Window is fullscreen` — rovnaká
+    vec, kvôli ktorej to rieši aj window-overview.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        live = next((c for c in clients() if c.get("address") == addr), None)
+        if live is None or not live.get("fullscreen"):
+            return True
+        dispatch(f"hl.dsp.window.fullscreen_state({{ window = {window_ref(addr)}, internal = 0, client = 0 }})")
+        time.sleep(0.3)
+    return False
+
+
+def wait_floating(addr: str, timeout: float = 1.5) -> bool:
+    """Počká, kým klient floating naozaj nahlási.
+
+    Dispatchere sú asynchrónne: `resize` poslaný hneď po `float` dobehne skôr,
+    než je okno floating, a Hyprland ho na tiled okne ignoruje — okno by ostalo
+    na default veľkosti floating okna.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        live = next((c for c in clients() if c.get("address") == addr), None)
+        if live is None or live.get("floating"):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def apply_geometry(addr: str, at, size, attempts: int = 3) -> None:
+    """Položí okno na uloženú pozíciu a veľkosť.
+
+    Hyprland po `float` okno ešte centruje, takže prvý `move` sa môže stratiť;
+    preto sa geometria po každom pokuse číta a pri rozdiele skúsi znova.
+    """
+    for _ in range(attempts):
+        if isinstance(at, list) and len(at) == 2:
+            dispatch(
+                f"hl.dsp.window.move({{ window = {window_ref(addr)}, x = {int(at[0])}, y = {int(at[1])}, exact = true }})"
+            )
+        if isinstance(size, list) and len(size) == 2:
+            dispatch(
+                f"hl.dsp.window.resize({{ window = {window_ref(addr)}, x = {int(size[0])}, y = {int(size[1])}, exact = true }})"
+            )
+        time.sleep(0.2)
+        live = next((c for c in clients() if c.get("address") == addr), None)
+        if live is None:
+            return
+        if at and size and live.get("at") == list(at) and live.get("size") == list(size):
+            return
+
+
+def place(addr: str, entry: dict) -> None:
+    move_to_workspace(addr, entry["workspace"])
+    if not entry.get("floating"):
+        return
+    clear_fullscreen(addr)
+    set_floating(addr)
+    wait_floating(addr)
+    apply_geometry(addr, entry.get("at"), entry.get("size"))
+
+
+def wait_ready(timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if hypr_json("version"):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def wait_for_window(entry: dict, used: set, pid: int, deadline: float):
+    """Čaká na okno spustenej aplikácie; vyhne sa tým, ktoré už patria inej."""
+    classes = {value.lower() for value in (entry.get("class"), entry.get("initial_class")) if value}
+    picked = None
+    while time.monotonic() < deadline:
+        for addr, client in windows_list().items():
+            if addr in used:
+                continue
+            if pid and client.get("pid") == pid:
+                return addr
+            names = {(client.get("class") or "").lower(), (client.get("initialClass") or "").lower()}
+            if names & classes and picked is None:
+                picked = addr
+        if picked:
+            return picked
+        time.sleep(0.2)
+    return None
+
+
+def launch(entry: dict, used: set, deadline: float):
+    cmd = entry["cmd"]
+    cwd = entry.get("cwd") or None
+    # Adresár môže medzitým zmiznúť (tmp, odpojený disk) — appka by v ňom nenaštartovala.
+    if cwd and not os.path.isdir(cwd):
+        cwd = None
+    try:
+        child = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except (OSError, ValueError) as error:
+        log(f"nepodarilo sa spustiť {shlex.join(cmd)}: {error}")
+        return None
+    return wait_for_window(entry, used, child.pid, min(deadline, time.monotonic() + WINDOW_WAIT))
+
+
+def already_restored() -> bool:
+    """Obnova patrí ku štartu session — druhý beh v tej istej by okná duplikoval."""
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    try:
+        return bool(signature) and RESTORED.read_text().strip() == signature
+    except OSError:
+        return False
+
+
+def mark_restored() -> None:
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if signature:
+        RESTORED.write_text(signature + "\n")
+
+
+def restore() -> int:
+    reset_log()
+    if disabled():
+        log("obnova vypnutá (session-restore on)")
+        return 0
+    if already_restored():
+        log("táto session už obnovu spravila, preskakujem")
+        return 0
+    state = load_json(LAST) or load_json(STATE)
+    if not state or not state.get("windows"):
+        log("žiadny uložený stav")
+        return 0
+    lock = acquire_lock(RESTORE_LOCK)
+    if lock is None:
+        log("obnova už beží")
+        return 0
+    if not wait_ready():
+        # Snímka zostáva: pri pomalom logine sa obnova nesmie stratiť.
+        log("hyprctl neodpovedá, obnova preskočená (snímka zostáva)")
+        return 1
+    # Snímka je jednorazová a maže sa až keď je session pripravená; podpis
+    # session zabráni druhej obnove, aj keby sa `restore` spustil dvakrát.
+    if LAST.exists():
+        LAST.unlink()
+    mark_restored()
+    time.sleep(SETTLE)
+    used = set(windows_list())
+    deadline = time.monotonic() + TOTAL_BUDGET
+    restored = 0
+    for entry in state["windows"]:
+        if time.monotonic() > deadline:
+            log("časový limit obnovy vypršal")
+            break
+        addr = launch(entry, used, deadline)
+        if addr is None:
+            log(f"okno sa neobjavilo: {shlex.join(entry['cmd'])}")
+            continue
+        used.add(addr)
+        place(addr, entry)
+        restored += 1
+        log(f"plocha {entry['workspace']}: {shlex.join(entry['cmd'])}")
+    log(f"obnovených okien: {restored}/{len(state['windows'])}")
+    return 0
+
+
+# ---------- sledovanie ----------
+
+def event_socket() -> Path | None:
+    base = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / "hypr"
+    candidates = []
+    signature = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
+    if signature:
+        candidates.append(base / signature / ".socket2.sock")
+    if base.is_dir():
+        candidates += sorted(base.glob("*/.socket2.sock"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def acquire_lock(path: Path):
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    handle = path.open("w")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
+def watching() -> bool:
+    """Druhý watch by ukladal dvakrát; lock preto drží jediný proces."""
+    if not WATCH_LOCK.exists():
+        return False
+    handle = acquire_lock(WATCH_LOCK)
+    if handle is None:
+        return True
+    fcntl.flock(handle, fcntl.LOCK_UN)
+    handle.close()
+    return False
+
+
+def watch() -> int:
+    # Log sa nečistí: inak by štart watchera zmazal výsledok obnovy z tohto loginu.
+    lock = acquire_lock(WATCH_LOCK)
+    if lock is None:
+        log("watch už beží")
+        return 0
+    path = event_socket()
+    if path is None:
+        log("event socket Hyprlandu nie je dostupný, ukladanie vypnuté")
+        return 1
+    try:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.connect(str(path))
+    except OSError as error:
+        log(f"event socket sa nedá otvoriť: {error}")
+        return 1
+    log(f"sledujem {path}")
+    save_live()
+    pending = None
+    while True:
+        try:
+            ready, _, _ = select.select([connection], [], [], 0.5)
+            data = connection.recv(4096) if ready else b""
+        except (OSError, ValueError):
+            data = b""
+        if ready and not data:  # socket zavrel Hyprland — session končí
+            log("session skončila")
+            return 0
+        for line in data.decode("utf-8", "replace").splitlines():
+            event = line.split(">>", 1)[0]
+            if event in EVENTS:
+                pending = time.monotonic()
+        if pending is not None and time.monotonic() - pending >= DEBOUNCE:
+            save_live()
+            pending = None
+
+
+# ---------- výpisy ----------
+
+def read_state():
+    last = load_json(LAST)
+    if last:
+        return last, "posledné odhlásenie"
+    live = load_json(STATE)
+    if live:
+        return live, "živý stav"
+    return None, ""
+
+
+def show_list() -> int:
+    state, source = read_state()
+    if not state or not state.get("windows"):
+        print("session-restore: nič uložené")
+        return 0
+    age = time.time() - state.get("saved", 0)
+    print(f"session-restore: {len(state['windows'])} okien ({source}, pred {int(age)} s)")
+    for entry in state["windows"]:
+        floating = " floating" if entry.get("floating") else ""
+        print(f"  plocha {entry['workspace']:<3} {entry['class']:<20} {shlex.join(entry['cmd'])}{floating}")
+    return 0
+
+
+def show_status() -> int:
+    state, source = read_state()
+    print(f"obnova: {'vypnutá' if disabled() else 'zapnutá'}")
+    print(f"watch: {'beží' if watching() else 'nebeží'}")
+    if state and state.get("windows"):
+        age = int(time.time() - state.get("saved", 0))
+        print(f"uložené: {len(state['windows'])} okien ({source}, pred {age} s)")
+    else:
+        print("uložené: nič")
+    return 0
+
+
+# ---------- príkazy ----------
+
+def set_disabled(value: bool) -> int:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    if value:
+        DISABLED.touch()
+        for path in (STATE, LAST, RESTORED):
+            path.unlink(missing_ok=True)
+        print("session-restore: obnova vypnutá, uložený stav zmazaný")
+    else:
+        DISABLED.unlink(missing_ok=True)
+        print("session-restore: obnova zapnutá")
+    return 0
+
+
+def forget() -> int:
+    for path in (STATE, LAST, RESTORED):
+        path.unlink(missing_ok=True)
+    print("session-restore: uložený stav zmazaný")
+    return 0
+
+
+def main(argv: list) -> int:
+    command = argv[1] if len(argv) > 1 else "status"
+    if command in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0
+    if command == "watch":
+        try:
+            return watch()
+        except KeyboardInterrupt:
+            return 0
+    if command == "restore":
+        return restore()
+    if command == "seal":
+        return seal()
+    if command == "save":
+        return save()
+    if command == "list":
+        return show_list()
+    if command == "forget":
+        return forget()
+    if command == "off":
+        return set_disabled(True)
+    if command == "on":
+        return set_disabled(False)
+    if command == "status":
+        return show_status()
+    print(f"session-restore: neznámy príkaz '{command}'", file=sys.stderr)
+    print(USAGE, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        code = main(sys.argv)
+    except Exception:  # každá chyba patrí aj do logu, inak zlyháva potichu
+        code = 1
+        log("CHYBA\n" + traceback.format_exc())
+        print(traceback.format_exc(), file=sys.stderr)
+    sys.exit(code)
