@@ -47,6 +47,7 @@ requiredGroups=(wheel video render input audio storage)
 preferredShell="/bin/zsh"
 fallbackShell="/bin/bash"
 sessionFile="/usr/share/wayland-sessions/hyprland.desktop"
+dmLink="/etc/systemd/system/display-manager.service"
 
 usage() {
     cat <<EOF
@@ -169,6 +170,26 @@ join_by_commas() {
     printf '%s' "$*"
 }
 
+same_shell() {
+    local a b
+
+    a="$(realpath -e "$1" 2>/dev/null)" || return 1
+    b="$(realpath -e "$2" 2>/dev/null)" || return 1
+    [[ "${a}" == "${b}" ]]
+}
+
+# Ktorý display manager systém naozaj spustí. `systemctl enable sddm` zapíše
+# len alias display-manager.service; keď na stroji ostal LightDM z XFCE,
+# ukazuje naň a prihlásenie skončí v XFCE, hoci sddm je nainštalované.
+active_display_manager() {
+    local target
+
+    [[ -e "${dmLink}" ]] || return 1
+    target="$(readlink -f "${dmLink}" 2>/dev/null)" || return 1
+    [[ -n "${target}" ]] || return 1
+    basename "${target}" .service
+}
+
 pick_shell() {
     if shell_listed "${preferredShell}"; then
         printf '%s' "${preferredShell}"
@@ -202,6 +223,7 @@ report_missing_account() {
         check_line "skupina ${grp}" 1 "účet neexistuje"
     done
     check_line "SDDM ponúka hyprland" 1 "účet neexistuje"
+    check_line "SDDM je display manager" 1 "účet neexistuje"
 }
 
 #----------------#
@@ -209,7 +231,7 @@ report_missing_account() {
 #----------------#
 
 run_check() {
-    local entry uid home shell owner mode_bits owner_digit state grp
+    local entry uid home shell owner mode_bits owner_digit state grp dm
 
     check_failures=0
 
@@ -260,7 +282,7 @@ run_check() {
         check_line "shell" 1 "${shell} neexistuje"
     elif shell_listed "${shell}"; then
         check_line "shell" 0 "${shell}"
-        if [[ "${shell}" != "${preferredShell}" ]] && shell_listed "${preferredShell}"; then
+        if ! same_shell "${shell}" "${preferredShell}" && shell_listed "${preferredShell}"; then
             note "shell je ${shell}; HyDE je pripravené na ${preferredShell}: chsh -s ${preferredShell} ${name}"
         fi
     else
@@ -289,6 +311,19 @@ run_check() {
         check_line "SDDM ponúka hyprland" 0 "hyprland.desktop"
     else
         check_line "SDDM ponúka hyprland" 1 "chýba ${sessionFile} (balíky: install.sh -i -s)"
+    fi
+
+    # Bez nainštalovaného sddm `systemctl enable sddm` zlyhá a boot ostane na
+    # starom manažéri — ten istý výsledok ako LightDM, ktorý link drží.
+    if ! command -v sddm >/dev/null 2>&1; then
+        check_line "SDDM je display manager" 1 "sddm nie je nainštalované (install.sh -i -s, alebo sudo pacman -S sddm)"
+    else
+        dm="$(active_display_manager || true)"
+        case "${dm}" in
+        sddm) check_line "SDDM je display manager" 0 "display-manager.service" ;;
+        "") check_line "SDDM je display manager" 1 "display-manager.service nie je nastavený: sudo systemctl enable sddm" ;;
+        *) check_line "SDDM je display manager" 1 "štartuje ${dm}: sudo systemctl disable ${dm} && sudo systemctl enable sddm" ;;
+        esac
     fi
 
     if [[ ${check_failures} -eq 0 ]]; then
@@ -334,7 +369,7 @@ run_create() {
         ensure_groups || return 1
 
         shell="${entry##*:}"
-        if [[ "${shell}" != "$(pick_shell)" ]]; then
+        if ! same_shell "${shell}" "$(pick_shell)"; then
             note "shell ${shell} nechávam; zmeníš ho cez: chsh -s $(pick_shell) ${name}"
         fi
         return 0

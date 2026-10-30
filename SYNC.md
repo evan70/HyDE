@@ -40,8 +40,9 @@ created, by `Scripts/machine-user.sh`, which runs from the checkout like the oth
 The check prints every condition it can read and exits non-zero while one is unmet: the account
 exists and is not `root`; `sudo -n` works (the installer needs sudo); `$HOME` exists, belongs to the
 account and is writable by it; the login shell is listed in `/etc/shells`; a password is set (a
-locked account cannot sign in at SDDM); each group in the table; and
-`/usr/share/wayland-sessions/hyprland.desktop` exists.
+locked account cannot sign in at SDDM); each group in the table;
+`/usr/share/wayland-sessions/hyprland.desktop` exists; and
+`display-manager.service` starts SDDM rather than whatever login manager the machine had before.
 
 | Group | Why this desktop needs it |
 | --- | --- |
@@ -66,6 +67,18 @@ The script refuses to run as `root`: its questions are about a user's `$HOME`, s
 and the deploy afterwards has to run as that same account. Run it as any account that has sudo and
 name the target with `--name`.
 
+The name is a default, not a requirement. On a machine that already runs another desktop — an Arch
+install with someone's own account, for example — pass that account instead of creating `hypr`:
+
+```bash
+./Scripts/machine-user.sh --check --name evan    # is the account you already use ready?
+./Scripts/machine-user.sh --create --name evan   # adds only the missing groups
+./Scripts/machine-setup.sh                       # run as that account; the desktop lands in its $HOME
+```
+
+That account keeps its home, shell and password, and nothing is renamed: this desktop is an
+addition to it, not a replacement. The only shared thing is the SDDM theme.
+
 Rollback of a created account: `sudo userdel -r hypr`. Removing one group:
 `sudo gpasswd -d hypr <group>`.
 
@@ -84,6 +97,10 @@ cd ~/HyDE
 ./Scripts/install.sh -i -s           # only on a bare machine: packages, AUR helper, nvidia, shell, system services
 ./Scripts/machine-setup.sh           # deploy Configs/, post-install steps, OpenSpec check
 ```
+
+`install.sh -i -s` enables SDDM but does not take over from a login manager that was already
+running: on a notebook that came with XFCE, LightDM still owns the boot until it is switched (see
+[When something goes wrong](#when-something-goes-wrong)).
 
 `install.sh -i` is interactive (AUR helper, nvidia, shell) and `machine-setup.sh` inherits the
 terminal, so prompts — the SDDM theme picker, the flatpak list — are answered by the person running
@@ -155,5 +172,15 @@ default and can be switched off the same way.
   machine wants the full install once.
 - **`--verify` reports `NO_MANIFEST`** — nothing has been deployed for this account yet; run the
   deploy.
+- **The machine still boots into XFCE** — `install.sh -i -s` only enables `sddm`; when the machine
+  already ran XFCE, the old login manager (usually LightDM) still owns
+  `/etc/systemd/system/display-manager.service`, so the boot lands in the old session even though
+  `sddm` is installed. `systemctl status display-manager` names the manager that starts; switch with
+  `sudo systemctl disable lightdm && sudo systemctl enable sddm` and reboot.
+  `machine-user.sh --check` reports this as a condition of its own, not as a missing session file,
+  and separates it from a machine where `sddm` was never installed (`pacman -Q sddm` says nothing),
+  because there the enable had nothing to start.
+- **SDDM appears but preselects the XFCE session** — pick `Hyprland` in the greeter's session menu
+  once; SDDM remembers the last choice and the repository does not set a default session.
 - **Backups** — every overwritten file is kept under `~/.config/cfg_backups/<date>/`, so a wrong
   deploy can be undone by copying back from there.

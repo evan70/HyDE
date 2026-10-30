@@ -13,8 +13,13 @@ The repository SHALL offer a read-only check of the account that is meant to run
 
 #### Scenario: Account ready for provisioning
 
-- **WHEN** the account exists, is not `root`, may use `sudo`, owns a writable `$HOME`, carries the groups this desktop uses, has a login shell listed in `/etc/shells` and the login manager offers a Hyprland session
+- **WHEN** the account exists, is not `root`, may use `sudo`, owns a writable `$HOME`, carries the groups this desktop uses, has a login shell listed in `/etc/shells`, the machine starts SDDM and the login manager offers a Hyprland session
 - **THEN** the check reports every condition as satisfied and exits zero
+
+#### Scenario: A different login manager still starts
+
+- **WHEN** the account is otherwise ready but the machine still starts another login manager, such as the LightDM that came with XFCE
+- **THEN** the check reports that condition as unmet, names the login manager that starts and prints the commands that switch the machine to SDDM
 
 #### Scenario: Check never needs privileges
 
@@ -44,6 +49,20 @@ Account creation SHALL happen only when it is explicitly requested, SHALL apply 
 
 - **WHEN** a machine already has other accounts
 - **THEN** creation changes no home directory, group, shell or password of those accounts
+
+### Requirement: The account name is a default, not a requirement
+
+The desktop SHALL be installable into any existing account named on the command line, so that it stays an addition to a machine that already runs another desktop rather than a fixed identity of its own.
+
+#### Scenario: Adopting the account a person already uses
+
+- **WHEN** the check and creation run with the name of the account that is already in use on that machine
+- **THEN** that account keeps its home directory, shell and password, gains only the missing groups, and receives the desktop's files inside its own `$HOME`
+
+#### Scenario: Default name on a clean machine
+
+- **WHEN** no name is given
+- **THEN** the desktop's own default account name is used, and the output states which name it picked
 
 ### Requirement: An existing account is not rewritten
 
