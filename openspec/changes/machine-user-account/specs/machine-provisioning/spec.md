@@ -59,10 +59,10 @@ The desktop SHALL be installable into any existing account named on the command 
 - **WHEN** the check and creation run with the name of the account that is already in use on that machine
 - **THEN** that account keeps its home directory, shell and password, gains only the missing groups, and receives the desktop's files inside its own `$HOME`
 
-#### Scenario: Default name on a clean machine
+#### Scenario: No name given on a machine that already has an account
 
-- **WHEN** no name is given
-- **THEN** the desktop's own default account name is used, and the output states which name it picked
+- **WHEN** no name is given, because the script runs from the account that already uses the machine
+- **THEN** that account is the target and nothing is created, and the output states which name it picked
 
 ### Requirement: An existing account is not rewritten
 

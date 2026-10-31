@@ -111,7 +111,7 @@ No data migration. On the notebook the documented order becomes:
 ```bash
 git clone https://github.com/evan70/HyDE.git ~/HyDE   # or the bundle
 ./Scripts/machine-user.sh --check                     # read-only
-./Scripts/machine-user.sh --create --name hypr        # only when the check says it is missing
+./Scripts/machine-user.sh --create                    # only when the check says it is missing
 ./Scripts/install.sh -i -s                            # packages, needs sudo
 ./Scripts/machine-setup.sh                            # deploy into that account's $HOME
 ```

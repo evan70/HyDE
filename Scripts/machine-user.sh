@@ -21,6 +21,10 @@
 # Existujúcemu účtu nemení meno, domov ani shell — len skupiny. Heslo ide
 # výhradne cez interaktívne sudo passwd; bez terminálu sa vypíše príkaz.
 #
+# Predpoklad je Arch s existujúcim účtom, do ktorého sa téma inštaluje: keď sa
+# skript púšťa z toho účtu, cieľom je on sám a --name netreba. `--create` je
+# pre prípad, že stroj účet ešte nemá.
+#
 # Skript sa púšťa ako bežný používateľ, ktorý má sudo. Ako root odmietne
 # bežať, lebo jeho otázky (domov, session, sudo) sú o používateľovi, nie
 # o uid 0, a deploy potom musí bežať ako ten istý účet.
@@ -55,7 +59,7 @@ Usage: $(basename "$0") [OPTIONS] [NAME]
 
   --check       (default) nič nemení; overí, či je účet pripravený na tento desktop
   --create      chýbajúci účet vytvorí (useradd -m) a doplní chýbajúce skupiny
-  --name NAME   účet, o ktorý ide (default hypr); to isté ako NAME na konci
+  --name NAME   účet, o ktorý ide (default: ten, z ktorého skript púšťaš); to isté ako NAME na konci
   -h, --help    táto nápoveda
 
 Exit status: 0 = v poriadku, 1 = niečo chýba alebo zlyhalo, 2 = zlá voľba.
@@ -99,7 +103,7 @@ while (($#)); do
     shift
 done
 
-name="${name:-hypr}"
+name="${name:-${USER:-$(id -un)}}"
 
 if [[ ! "${name}" =~ ^[a-z_][a-z0-9_-]*$ || ${#name} -gt 32 ]]; then
     echo "CHYBA: '${name}' nie je platné meno účtu (malé písmená, číslice, _ a -, max 32 znakov)." >&2
@@ -108,7 +112,7 @@ fi
 
 if [[ ${EUID} -eq 0 ]]; then
     echo "CHYBA: tento skript sa púšťa ako účet, ktorý má desktop dostať, nie ako root." >&2
-    echo "       Skontroluj konkrétny účet: $(basename "$0") --check --name ${name}" >&2
+    echo "       Skontroluj konkrétny účet: $(basename "$0") --check --name <účet>" >&2
     exit 1
 fi
 

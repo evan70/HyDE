@@ -33,14 +33,16 @@ transport; nothing outside `Configs/` has to be copied by hand.
 created, by `Scripts/machine-user.sh`, which runs from the checkout like the other scripts:
 
 ```bash
-./Scripts/machine-user.sh --check                 # read-only, changes nothing; default account is hypr
-./Scripts/machine-user.sh --create --name hypr    # only when the check says the account is missing
+./Scripts/machine-user.sh --check    # read-only, changes nothing; targets the account you run it from
+./Scripts/machine-user.sh --create   # only when the check says the account is missing
 ```
 
-`hypr` is only the script's default name. On a machine that already has a daily account, target that
-account instead — the notebook provisions `dany` and keeps `hypr` as a throwaway test account for
-this cycle. Audio, logind sessions and autologin belong to the account sitting at the seat, so two
-accounts logged into the desktop at once fight over `/dev/snd` and the loser shows `Dummy Output`.
+The expected start is an Arch install with someone's own account: run the script from that account
+and it is the target, so no name has to be typed. `--name` is for pointing at a different account on
+the same machine. The notebook's daily account is `dany`; `hypr` there is a throwaway account kept
+for the machine-user plus machine-setup cycle. Audio, logind sessions and autologin belong to the
+account sitting at the seat, so two accounts logged into the desktop at once fight over `/dev/snd`
+and the loser shows `Dummy Output`.
 
 The check prints every condition it can read and exits non-zero while one is unmet: the account
 exists and is not `root`; `sudo -n` works (the installer needs sudo); `$HOME` exists, belongs to the
@@ -73,12 +75,14 @@ and the deploy afterwards has to run as that same account. Run it as any account
 name the target with `--name`.
 
 The name is a default, not a requirement. On a machine that already runs another desktop — an Arch
-install with someone's own account, for example — pass that account instead of creating `hypr`:
+install with someone's own account, for example — running the script from that account adopts it
+and creates nothing:
 
 ```bash
-./Scripts/machine-user.sh --check --name evan    # is the account you already use ready?
-./Scripts/machine-user.sh --create --name evan   # adds only the missing groups
-./Scripts/machine-setup.sh                       # run as that account; the desktop lands in its $HOME
+./Scripts/machine-user.sh --check                 # is the account you are running from ready?
+./Scripts/machine-user.sh --check --name evan     # or look at another account on the machine
+./Scripts/machine-user.sh --create                # adds only the missing groups
+./Scripts/machine-setup.sh                        # run as that account; the desktop lands in its $HOME
 ```
 
 That account keeps its home, shell and password, and nothing is renamed: this desktop is an
