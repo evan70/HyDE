@@ -180,5 +180,6 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 - **Pravidlo do budúcna:** pri Dummy Output najprv `loginctl list-sessions` (kto má `seat0`) a `fuser -v /dev/snd/*` (kto drží kartu), až potom reštartovať služby — a nikdy nemaskovať audio účtu, ktorý má sedenie.
 
 ### Pozorovania
+- **`hypr` na notase je len testovací účet nášho setu**, nie denný účet — tým je `dany`. Slúži na cyklus `machine-user.sh` + `machine-setup.sh` (vytvor → deploy → zmazanie), takže sa dá kedykoľvek zmazať a založiť znova. Pri riešení prostredia (zvuk, sedenia, autologin, služby) preto vychádzať z `dany` a prihlásenie do `hypr` nesmie ovplyvniť bežnú prácu v `dany`; sedieť pri stroji má vždy len jeden z nich.
 - Prečo na notase nikdy neprebehol `install_pst.sh` (chýbal `the_hyde_project.conf`), sa už nedá zistiť — log z toho behu niet. Rovnaká diera môže nastať na ďalšom stroji.
 - `sshd` sa po reštarte nespustil, hoci bol `enable --now`; bez neho sa diaľková diagnostika nedá zopakovať, takže do `SYNC.md` patrí krok `systemctl enable sshd`, ak sa má nota obsluhovať na diaľku.

@@ -37,6 +37,11 @@ created, by `Scripts/machine-user.sh`, which runs from the checkout like the oth
 ./Scripts/machine-user.sh --create --name hypr    # only when the check says the account is missing
 ```
 
+`hypr` is only the script's default name. On a machine that already has a daily account, target that
+account instead — the notebook provisions `dany` and keeps `hypr` as a throwaway test account for
+this cycle. Audio, logind sessions and autologin belong to the account sitting at the seat, so two
+accounts logged into the desktop at once fight over `/dev/snd` and the loser shows `Dummy Output`.
+
 The check prints every condition it can read and exits non-zero while one is unmet: the account
 exists and is not `root`; `sudo -n` works (the installer needs sudo); `$HOME` exists, belongs to the
 account and is writable by it; the login shell is listed in `/etc/shells`; a password is set (a
