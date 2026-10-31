@@ -167,6 +167,11 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 - **Upratané:** dočasný `sudoers.d/99-provision-test` (NOPASSWD pre `hypr`) je zmazaný, `sudo -n` pre `hypr` je zase `rc=1`; `/home/hypr/.cache/probe` a pomocné logy tiež.
 - **Vlastná chyba pri teste:** drop-in som prvýkrát zapísal cez `echo … | sudo -S tee` a do súboru sa dostal riadok s heslom → sudo hlásil `syntax error`. Opravené zápisom do `/tmp` a `sudo cp` + `visudo -c` (`parsed OK`). Sudoers sa nemá skladať v pipe s heslom, ale z pripraveného súboru.
 
+### Log out na notase nefungoval (2026-10-31)
+- **Príčina:** `~/.config/waybar/config` zo septembra 2025 (starý HyDE) prežíva vedľa nasadeného `config.jsonc`, a Waybar načíta `config` skôr (v journale `Using configuration file …/waybar/config`, bar mal starú geometriu 1580×50 namiesto 1600×44). Jeho tlačidlo power spúšťalo `wlogout` bez parametrov, ktorý číta `~/.config/wlogout/layout` — tiež starý súbor s `hyprctl dispatch exit`. Hyprland 0.56 s Lua configom ten legacy názov odmietne (`hl.dispatch: expected a dispatcher`), takže Logout neurobil nič.
+- **Oprava:** migrácia `Scripts/migrations/v26.9.3.sh` odsunie `waybar/config` a nečíslované `wlogout/layout` + `style.css` na `*.pre-hyde`, keď sú vedľa prítomné súčasné súbory; nič sa nemaže. Na notase som ich odsunul ručne a reštartoval `hyde-Hyprland-bar.service` — bar sa načíta z `config.jsonc` (1600×44) a jeho power menu ide cez `hyde-shell logoutlaunch 1` → `layout_1` → `hyde-shell logout`.
+- **Poznámka:** `uwsm check is-active` vracia na notase 1 aj s reálnym session env, `hyprshutdown` tam nie je — `hyde-logout` preto skončí na `hyprctl dispatch 'hl.dsp.exit()'`, čo je overená a funkčná forma (na tomto stroji je `uwsm` aktívny a `hyprshutdown` existuje).
+
 ### Pozorovania
 - Prečo na notase nikdy neprebehol `install_pst.sh` (chýbal `the_hyde_project.conf`), sa už nedá zistiť — log z toho behu niet. Rovnaká diera môže nastať na ďalšom stroji.
 - `sshd` sa po reštarte nespustil, hoci bol `enable --now`; bez neho sa diaľková diagnostika nedá zopakovať, takže do `SYNC.md` patrí krok `systemctl enable sshd`, ak sa má nota obsluhovať na diaľku.
