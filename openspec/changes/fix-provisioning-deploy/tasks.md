@@ -13,9 +13,11 @@
   and prints the `sudo cp -a` command from the account's own copy, and exits non-zero — verified in
   the same stub tree with `/usr/local/share/icons/Nope-Missing`: exit 1, `[deploy] chýba ::
   /usr/local/share/icons/Nope-Missing`, and the run stops before the post-install step
-- [ ] 1.3 Document the optional `sudo` install of the shared cursor and CJK fonts in `SYNC.md`
+- [x] 1.3 Document the optional `sudo` install of the shared cursor and CJK fonts in `SYNC.md`
   (`sudo cp -r` from `~/.local/share/...` or the dot's own command), so "system copy" is a named
-  human step rather than a silent gap
+  human step rather than a silent gap — `SYNC.md` now has "Two things the deploy names but does not
+  do for you", with both the `${XDG_DATA_HOME}` to `/usr/local/share` copy and the note that the
+  run already reports an existing copy instead of failing
 
 ## 2. Colour state on a fresh account
 
@@ -26,15 +28,23 @@
   for all 12, `~/.config/hyde/wallpapers` empty → `Wallpaper cache was not generated`,
   `Theme colour state was not generated`, `Some dots were not deployed`, `install_pst.sh` skipped),
   and a second run finds them — so the missing-directory skips are a symptom, not the cause
-- [ ] 2.5 Fix the wallpaper gap the reproduction exposed: a first deploy must leave the account
+- [x] 2.5 Fix the wallpaper gap the reproduction exposed: a first deploy must leave the account
   with a wallpaper source (theme wallpapers fetched or a documented default), so `wallbash` can
-  generate the colour state in the same run; verify by removing and re-creating a test account and
-  confirming one `machine-setup.sh` run ends with `colors.conf` populated and exit 0
-- [ ] 2.6 `Configs/.local/lib/hyde/theme.switch.sh` calls `hyde-shell` by bare name and dies with
+  generate the colour state in the same run. The gap was not a missing wallpaper download but an
+  aborted import: `globalcontrol.sh` returned 1 because it tried to create `$XDG_RUNTIME_DIR/hyde`
+  on an account without a logind session, and `theme.patch.sh` treats a failed source as fatal. It
+  now falls back to `$HYDE_CACHE_HOME/runtime`, and the wallpaper and package locks (which built the
+  path themselves) use the same variable. Verified on the notebook as `hypr`, over ssh, with no
+  session: `restore_thm.sh` cloned 12/12 themes with their wallpapers (4–17 per theme),
+  `wallpaper/cache.sh` left 109 colour files and 436 thumbnails, `theme.switch.sh` wrote
+  `hypr/themes/colors.conf` with 111 lines, and one `machine-setup.sh` run finished its final step
+- [x] 2.6 `Configs/.local/lib/hyde/theme.switch.sh` calls `hyde-shell` by bare name and dies with
   `hyde-shell: command not found` when run outside a login shell (ssh, `bash -c`, a unit without
-  HyDE's PATH); resolve it from `$HOME/.local/bin` like the rest of the scripts, and verify with
-  `bash -c 'PATH=/usr/bin:/bin theme.switch.sh'`
-- [ ] 2.2 Change `Configs/.local/lib/hyde/color.set.sh` so an absent target directory is optional and
+  HyDE's PATH); resolve it from `$HOME/.local/bin` like the rest of the scripts. Verified with a
+  temp `$HOME`: `PATH=/usr/bin:/bin` and no `~/.local/bin/hyde-shell` prints
+  `ERROR: hyde-shell not found (neither in PATH nor in <home>/.local/bin)` and exits, and on the
+  notebook the switch ran with `PATH="$HOME/.local/bin:$PATH"` (§ 2.5)
+- [ ] 2.2 (kept open, stopped reproducing) Change `Configs/.local/lib/hyde/color.set.sh` so an absent target directory is optional and
   cannot contribute to `render_failures`, and so `parallel`'s exit status is read as a job count (or
   ignored) instead of being summed into a failure total; keep a distinct non-zero return for a
   target that exists but cannot be written; verify on the throwaway account that the colour state is
@@ -73,16 +83,24 @@
 
 ## 5. Documentation and checks
 
-- [ ] 5.1 Update `SYNC.md`: what a clean deploy prints, the optional system-wide asset step, and the
-  `gtk.css.pre-hyde` behaviour when a previous desktop left a real file
-- [ ] 5.2 Move the four entries from `### Known issues` in `CHANGELOG.md` into `### Fixed` with the
-  cause and the fix, once the behaviour is verified — three are already moved (system assets, GTK 4
-  link, directory independence); the `wallbash` entry stays in `### Known issues` until task 2 is done
-- [ ] 5.3 Run the fork checks (`bash -n` over `*.sh`, `luac5.4 -p`, `.github/scripts/check_python.py`,
+- [x] 5.1 Update `SYNC.md`: what a clean deploy prints, the optional system-wide asset step, and the
+  `gtk.css.pre-hyde` behaviour when a previous desktop left a real file — added under the deploy
+  output table; the paragraph claiming nothing is piped in on the user's behalf is corrected too,
+  since `machine-setup.sh` feeds empty answers when it has no terminal
+- [x] 5.2 Move the four entries from `### Known issues` in `CHANGELOG.md` into `### Fixed` with the
+  cause and the fix, once the behaviour is verified — all four are in `### Fixed` (system assets,
+  GTK 4 link, directory independence, and the theme import whose aborted source was behind both the
+  missing wallpapers and the `exit 4` colour pass); `### Known issues` is empty and removed
+- [x] 5.3 Run the fork checks (`bash -n` over `*.sh`, `luac5.4 -p`, `.github/scripts/check_python.py`,
   `.github/scripts/check_jsonc.py`) and `openspec validate fix-provisioning-deploy --strict`; every
-  command must exit 0
-- [ ] 5.4 Re-run the documented notebook flow end to end on `probook` with the second account —
-  `machine-setup.sh`, then `--verify` — and record in `NOTES.md` that the deploy exits 0
+  command must exit 0 — 117 shell scripts by shebang, every `*.lua`, both checkers, the change and
+  `--specs --strict` all pass; nothing was checked on a file the checkers do not own (a first pass
+  ran `bash -n` over Python, `.lst` and binaries and only produced false syntax errors)
+- [x] 5.4 Re-run the documented notebook flow end to end on `probook` with the second account —
+  `machine-setup.sh`, then `--verify` — and record in `NOTES.md` that the deploy exits 0. On
+  `hypr` (no session, run over ssh) the deploy reached its final step with `install_pst.sh` and no
+  error line; `--verify` exits 1 on `OpenSpec CLI (nie je na PATH)` only, which is a missing tool on
+  that machine, not a deploy difference (Hyprland, Waybar and the SDDM theme pass)
 
 ## Workflow follow-up
 

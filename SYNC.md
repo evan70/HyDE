@@ -104,7 +104,8 @@ running: on a notebook that came with XFCE, LightDM still owns the boot until it
 
 `install.sh -i` is interactive (AUR helper, nvidia, shell) and `machine-setup.sh` inherits the
 terminal, so prompts — the SDDM theme picker, the flatpak list — are answered by the person running
-it. Nothing is piped in on the user's behalf.
+it. Without a terminal (CI, a closed stdin) it feeds empty answers instead, which those prompts read
+as "take the default", so an unattended run does not stall on a question it cannot show.
 
 What the deploy prints, in order:
 
@@ -119,6 +120,18 @@ What the deploy prints, in order:
 
 Afterwards it prints the steps it cannot do for you: the first login and theme choice, and
 `gh auth login` before the first `git push`.
+
+Two more things it names but does not do for you:
+
+- **Shared cursors and CJK fonts.** `Bibata-Modern-Ice`, its hyprcursor build and `NotoSansCJK` are
+also installed under `/usr/local/share`, which an ordinary account cannot write. When they are
+already there the deploy says `systémové assety (N) už na stroji sú` and carries on; when they are
+missing it prints the path and the `sudo cp -a` command that copies it from the account's own copy
+in `~/.local/share`.
+- **`gtk.css.pre-hyde`.** An account that came from another desktop has a real
+`~/.config/gtk-4.0/gtk.css` (CachyOS ships one). The theme switch renames it to `gtk.css.pre-hyde`
+once and links the theme's file in its place; the distro file is kept, and an existing
+`.pre-hyde` copy is never overwritten.
 
 ## Verifying
 
