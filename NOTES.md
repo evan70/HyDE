@@ -172,6 +172,11 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 - **Oprava:** migrácia `Scripts/migrations/v26.9.3.sh` odsunie `waybar/config` a nečíslované `wlogout/layout` + `style.css` na `*.pre-hyde`, keď sú vedľa prítomné súčasné súbory; nič sa nemaže. Na notase som ich odsunul ručne a reštartoval `hyde-Hyprland-bar.service` — bar sa načíta z `config.jsonc` (1600×44) a jeho power menu ide cez `hyde-shell logoutlaunch 1` → `layout_1` → `hyde-shell logout`.
 - **Poznámka:** `uwsm check is-active` vracia na notase 1 aj s reálnym session env, `hyprshutdown` tam nie je — `hyde-logout` preto skončí na `hyprctl dispatch 'hl.dsp.exit()'`, čo je overená a funkčná forma (na tomto stroji je `uwsm` aktívny a `hyprshutdown` existuje).
 
+### Zvuk znovu Dummy Output (2026-10-31)
+- **Tentoraz to nebol wireplumber:** `journalctl --user` na `hypr` hlásil `spa.alsa: 'front:0': playback open failed: Device or resource busy`, takže kartu držal niekto iný. `fuser /dev/snd/*` ukázal procesy oboch účtov — `hypr` (pipewire 237404, wireplumber 237405) aj **`dany` (pipewire 237517, wireplumber 237518)**. Jeho session visela, takže `restart wireplumber` aj reštart celého reťazca na `hypr` skončili znovu na Dummy Output.
+- **Riešenie:** ako `dany` zastaviť audio stack (`systemctl --user stop pipewire.socket pipewire-pulse.socket wireplumber pipewire pipewire-pulse`, vrátane socketu, inak sa aktivuje znova), potom `systemctl --user restart wireplumber` pod `hypr` → `alsa_output.pci-0000_00_1b.0.analog-stereo`, default nastavený, nemutované, 60 %.
+- **Pravidlo do budúcna:** pri Dummy Output najprv `fuser -v /dev/snd/*` a pozrieť vlastníka, až potom reštartovať služby. Reštart pomôže len vtedy, keď kartu nedrží cudzia inštancia (to bol prípad 30. 10., kde stačil `restart wireplumber`).
+
 ### Pozorovania
 - Prečo na notase nikdy neprebehol `install_pst.sh` (chýbal `the_hyde_project.conf`), sa už nedá zistiť — log z toho behu niet. Rovnaká diera môže nastať na ďalšom stroji.
 - `sshd` sa po reštarte nespustil, hoci bol `enable --now`; bez neho sa diaľková diagnostika nedá zopakovať, takže do `SYNC.md` patrí krok `systemctl enable sshd`, ak sa má nota obsluhovať na diaľku.
