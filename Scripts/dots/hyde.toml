@@ -99,7 +99,9 @@ paths = [
 action = "sync"
 source_root = "Configs/.local/bin"
 target_root = "${HOME}/.local/bin"
-paths = ["hyde-shell", "hydectl"]
+# idle-shutdown je v hypridle.conf aj v `SUPER + ALT + Delete`, takže bez neho
+# sa profil vypnutia po nečinnosti nedá vybrať a listenery volajú chýbajúci súbor.
+paths = ["hyde-shell", "hydectl", "idle-shutdown"]
 
 [grimblast]
 version = "26.08.17"
