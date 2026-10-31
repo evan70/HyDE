@@ -325,8 +325,10 @@ set_hash() {
     "$hashMech" "$hashImage" | awk '{print $1}'
 }
 check_package() {
-    local lock_file="${XDG_RUNTIME_DIR:-/tmp}/hyde/__package.lock"
-    mkdir -p "${XDG_RUNTIME_DIR:-/tmp}/hyde"
+    # HYDE_RUNTIME_DIR already falls back to the cache on an account without a
+    # session, which is exactly the case a provisioning run is in.
+    local lock_file="${HYDE_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/hyde}/__package.lock"
+    mkdir -p "$(dirname "$lock_file")"
     if [ -f "$lock_file" ]; then
         return 0
     fi
@@ -551,7 +553,7 @@ wallbash_state_is_complete() {
 ##
 wallpaper_acquire_lock() {
     local timeout="${1:-15}"
-    local lockDir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hyde"
+    local lockDir="${HYDE_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hyde}"
     mkdir -p "$lockDir"
     exec {WALLPAPER_LOCK_FD}>"$lockDir/wallpaper.lock"
     if ! flock -w "$timeout" "$WALLPAPER_LOCK_FD"; then
