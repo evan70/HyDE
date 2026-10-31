@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
-[[ $HYDE_SHELL_INIT -ne 1 ]] && eval "$(hyde-shell init)"
+# Called by the install, a keybind or an ssh command: only a HyDE login session
+# has hyde-shell in PATH, so look for it where the install puts it before
+# giving up. A bare name died with `hyde-shell: command not found`, which the
+# install then reported as `unable to detect theme`.
+if [[ $HYDE_SHELL_INIT -ne 1 ]]; then
+    hyde_shell="$(command -v hyde-shell)"
+    [ -n "$hyde_shell" ] || { [ -x "$HOME/.local/bin/hyde-shell" ] && hyde_shell="$HOME/.local/bin/hyde-shell"; }
+    if [ -z "$hyde_shell" ]; then
+        echo "ERROR: hyde-shell not found (neither in PATH nor in $HOME/.local/bin)" >&2
+        exit 1
+    fi
+    eval "$("$hyde_shell" init)"
+fi
 [ -z "$HYDE_THEME" ] && echo "ERROR: unable to detect theme" && exit 1
 get_themes
 confDir="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -238,6 +250,21 @@ link_gtk4_theme() {
     while IFS= read -r -d '' f; do
         name="$(basename -- "$f")"
         [ "$name" = "settings.ini" ] && continue
+        # Súbor, ktorý na tom istom mieste nechal pôvodný desktop (CachyOS dáva
+        # reálny gtk-4.0/gtk.css), zhodí ln -s na "File exists". Odložíme ho
+        # nabok — nikdy nemažeme a pri ďalšom prepnutí ho už necháme tak, aby
+        # sa predošlá záloha neprepísala.
+        if [ -e "$confGtk4/$name" ] && [ ! -L "$confGtk4/$name" ]; then
+            if [ -e "$confGtk4/$name.pre-hyde" ]; then
+                print_log -sec "theme" -warn "gtk4" "keeping '$name': '$name.pre-hyde' already holds an earlier copy"
+                continue
+            fi
+            if ! mv -- "$confGtk4/$name" "$confGtk4/$name.pre-hyde"; then
+                print_log -sec "theme" -warn "gtk4" "could not move '$name' aside, leaving it in place"
+                continue
+            fi
+            print_log -sec "theme" -stat "gtk4" "moved '$name' to '$name.pre-hyde' before linking the theme"
+        fi
         ln -s -- "$f" "$confGtk4/$name"
     done < <(find -L "$themeGtk4" -mindepth 1 -maxdepth 1 -print0)
 }

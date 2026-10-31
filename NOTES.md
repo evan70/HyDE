@@ -133,3 +133,32 @@ Malé opravy idú priamo, bez návrhu; väčšia zmena = proposal → design →
 ### Ešte otvorené
 - Zmena je hotová a CI zelené, ale **nie je zarchivovaná**: `openspec archive machine-user-account` zlúči 3 nové požiadavky do `openspec/specs/machine-provisioning/spec.md` (5 → 8 požiadaviek).
 - Celý postup z `SYNC.md` ešte neprešiel na notase; skript je overený len tu, na throwaway účtoch, ktoré zase zmizli.
+
+## 2026-10-31 — prvý ozajstný beh na notase (`probook`, 192.168.1.105)
+
+### Hotovo
+- **Notas bootoval do XFCE:** `display-manager.service → lightdm.service` a `sddm` disabled, hoci `sddm 0.21` aj `hyprland 0.56` boli nainštalované. `systemctl enable --force sddm; systemctl disable lightdm` to prehodilo; po reštarte `Desktop=Hyprland`, `Type=wayland` cez `uwsm start -e -D Hyprland hyprland.desktop`.
+- **SDDM téma na notase nebola:** `/etc/sddm.conf.d/the_hyde_project.conf` chýbal, `/usr/share/sddm/themes` mal len `elarun`, `maldives`, `maya` a `kde_settings.conf` ukazoval `Current=maya`. Candy som preniesol z tohto repa (tarball `Source/arcs/Sddm_Candy.tar.gz` + šesť súborov z `Configs/`), `sddm-greeter --test-mode` prešiel bez jediného riadku v logu.
+- **`hypr` nemal HyDE vôbec:** len `~/.config/hypr/hyprland.lua`. Doplnené skupiny (`video render input audio storage`), klon do `/home/hypr/HyDE` a `machine-setup.sh`; výsledok `HYDE_THEME="Catppuccin Mocha"`, waybar + wallbash nasadené.
+- **Zvuk v `hypr`:** PipeWire bežal, karta v duplexnom profile, ale výstupný node sa nevytvoril (`wireplumber: Failed to create ALSA node alsa_output…analog-stereo: Object activation aborted: PipeWire proxy destroyed`), takže default bol `Dummy Output`. `systemctl --user restart wireplumber` (potom `pipewire pipewire-pulse`) sink vytvoril; default `alsa_output.pci-0000_00_1b.0.analog-stereo`, nemutované.
+
+### Odchytené bugy (otvorené)
+1. **Deploy systémových dots bez roota** — `PermissionError: Unable to prepare destination path: /usr/local/share/icons/Bibata-Modern-Ice`, to isté `hyprcursor-bibata-modern-ice` a `font-noto-sans-cjk-ttc`. Deploy skončí `ERROR :: Some dots were not deployed`, `machine-setup.sh` vráti chybu, hoci oba assety na stroji sú (28 M kurzor, 19 M fontov, `fc-list` 40 CJK). Re-deploy hotového účtu preto vždy vyzerá ako rozbitý stroj.
+2. **Wallbash na čistom účte** — `skip 'missing directory'` pre `~/.config/hypr/animations/theme.conf`, `~/.config/spicetify/Themes/Sleek/color.ini`, `~/.config/vim/colors/wallbash.vim`, potom `render one or more templates failed, the colour state is incomplete` (exit 4) a `[theme] error :: generating the colour state for Catppuccin Mocha failed with 4`; `colors.conf` pritom vznikol (88 farebných riadkov).
+3. **`gtk-4.0/gtk.css` kolízia** — `ln: failed to create symbolic link '/home/hypr/.config/gtk-4.0/gtk.css': File exists`, lebo na CachyOS tam bol reálny súbor. Dot sa počíta ako zlyhaný; pomohlo ručné presunutie do `gtk.css.pre-hyde`.
+4. **`machine-setup.sh` dedí cwd** — spustený ako `hypr` z `/home/dany` sype `find: Failed to restore initial working directory /home/dany: Permission denied` a časť dots sa nenasadí. Poistka by bol `cd "$HOME"` na začiatku.
+
+### Cyklus účtu na notase (minimálny install, 2026-10-31)
+- Záloha `hypr` domova: `/home/dany/hypr-home-20261031-0030.tgz` (1.1 G).
+- `loginctl terminate-user hypr` + `userdel -r hypr` → `getent passwd hypr` prázdne, `/home/hypr` zmazaný.
+- `machine-user.sh --check --name hypr` po zmazaní → exit 1 (`účet existuje (účet neexistuje)` + závislé `[chyba]`).
+- `machine-user.sh --create --name hypr` → exit 0, `hypr:x:1001:1002::/home/hypr:/bin/zsh`, skupiny `wheel audio input render storage video`, domov `700`; `--check` po → exit 0 „pripravený na deploy“.
+- `teraz` overené: skript funguje aj na **druhom účte**, ktorý sa vytvára po boku existujúceho (`dany`), a `--check` je idempotentný.
+- **Nález 1:** `--create` cez SSH bez terminálu zlyhá (`sudo: a password is required`) — sudo v skripte nemá `-S`; pod `script -qec` s pipnutým heslom sa tiež minie. Riešenie pri teste: dočasný `sudoers.d/99-provision-test` s `NOPASSWD` pre `dany`, po cykle zmazaný.
+- **Nález 2:** keď účet, ktorý skript púšťa, má sudo za heslo, `--check` hlási dve falošné chyby (`sudo (bez hesla sa nedá overiť)` a `heslo (nie je nastavené)`) hoci účet je v poriadku — `passwd -S` bez roota zlyhá a fallback `sudo -n passwd -S` sa nedostane k heslu.
+- **Nález 3 (deploy na čistom účte):** prvý beh `machine-setup.sh` skončí pred farbami — témy sú naklonované bez wallpaperov (`No compatible wallpapers found` pre všetkých 12, `~/.config/hyde/wallpapers` prázdny), takže `Wallpaper cache was not generated`, `Theme colour state was not generated` a `Some dots were not deployed`; `install_pst.sh` sa už nespustí. Druhý beh ich nájde.
+- **Nález 4:** `theme.switch.sh` volá `hyde-shell` bez PATH; z `bash -c`/SSH to skončí `hyde-shell: command not found` a `unable to detect theme`.
+
+### Pozorovania
+- Prečo na notase nikdy neprebehol `install_pst.sh` (chýbal `the_hyde_project.conf`), sa už nedá zistiť — log z toho behu niet. Rovnaká diera môže nastať na ďalšom stroji.
+- `sshd` sa po reštarte nespustil, hoci bol `enable --now`; bez neho sa diaľková diagnostika nedá zopakovať, takže do `SYNC.md` patrí krok `systemctl enable sshd`, ak sa má nota obsluhovať na diaľku.

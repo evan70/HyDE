@@ -8,7 +8,18 @@ export HYDE_CONFIG_HOME="$XDG_CONFIG_HOME/hyde"
 export HYDE_DATA_HOME="$XDG_DATA_HOME/hyde"
 export HYDE_CACHE_HOME="$XDG_CACHE_HOME/hyde"
 export HYDE_STATE_HOME="$XDG_STATE_HOME/hyde"
-export HYDE_RUNTIME_DIR="$XDG_RUNTIME_DIR/hyde"
+# An account without a logind session (a provisioning run over ssh, or before
+# its first login) has no "$XDG_RUNTIME_DIR", and cannot create it: /run is
+# root-owned. That is a normal state, not a broken one, so HyDE's runtime files
+# move to the cache, which the account does own. Without this the state-dir
+# check below failed the whole source, and every caller that treats a failed
+# source as fatal -- theme.patch.sh during the theme import did -- stopped.
+if [ -d "$XDG_RUNTIME_DIR" ] && [ -w "$XDG_RUNTIME_DIR" ]; then
+    HYDE_RUNTIME_DIR="$XDG_RUNTIME_DIR/hyde"
+else
+    HYDE_RUNTIME_DIR="$HYDE_CACHE_HOME/runtime"
+fi
+export HYDE_RUNTIME_DIR
 export ICONS_DIR="$XDG_DATA_HOME/icons"
 export FONTS_DIR="$XDG_DATA_HOME/fonts"
 export THEMES_DIR="$XDG_DATA_HOME/themes"

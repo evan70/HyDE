@@ -91,6 +91,11 @@ if ! "${scrDir}/install.sh" --help 2>/dev/null | grep -q -- '--restore'; then
     exit 1
 fi
 
+# Deploy beží z domova účtu. Keď ho niekto spustí ako `sudo -u hypr` z cudzieho
+# adresára (napríklad /home/dany), každý find v deployi skončí na "Failed to
+# restore initial working directory" a časť dots sa vôbec nenasadí.
+cd "${HOME}"
+
 #----------------#
 # porovnanie     #
 #----------------#
@@ -277,6 +282,26 @@ run_verify() {
 # režim: deploy  #
 #----------------#
 
+# Systémové assety, ktoré deez nedokázal zapísať: cesty z PermissionError v logu.
+system_asset_paths() {
+    local log="$1"
+
+    [ -f "${log}" ] || return 0
+    grep -oE 'Unable to prepare destination path: [^[:space:]]+' "${log}" 2>/dev/null |
+        sed 's/^Unable to prepare destination path: //' | sort -u
+}
+
+# Používateľská kópia systémovej cesty, z ktorej sa dá doplniť cez sudo.
+user_copy_of() {
+    local path="$1" rest
+
+    case "${path}" in
+    /usr/local/share/*) rest="${path#/usr/local/share/}" ;;
+    *) return 1 ;;
+    esac
+    printf '%s/.local/share/%s' "${HOME}" "${rest}"
+}
+
 openspec_note() {
     local bin
     bin="$(command -v openspec || true)"
@@ -347,11 +372,44 @@ run_deploy() {
     fi
 
     print_log -sec "deploy" -b "krok 1/2 :: " "install.sh ${installFlags[*]}"
-    if ! run_interactive "${scrDir}/install.sh" "${installFlags[@]}"; then
-        print_log -r "[deploy] " -crit "ERROR" "install.sh skončil s chybou, zvyšok sa preskakuje"
-        print_log -y "[deploy] " -b "tip :: " "ak chýbali balíky, spusti Scripts/install.sh -i -s a potom tento skript znova"
-        return 1
+    local deployLog deployFailed=0
+    deployLog="$(mktemp)"
+    if run_interactive "${scrDir}/install.sh" "${installFlags[@]}" 2>&1 | tee "${deployLog}"; then
+        deployFailed=0
+    else
+        deployFailed=1
     fi
+
+    if ((deployFailed)); then
+        # Kurzor a CJK fonty sa nasadzujú aj do /usr/local/share, kam bežný účet
+        # nezapíše. deez preto tie dots ukončí PermissionError, hoci ich obsah je
+        # na stroji už z prvého installu. Keď sú všetky také cesty prítomné, nič
+        # nechýba a deploy sa počíta za úspešný; inak sa vypíše, čo doplniť.
+        local -a sysPaths=() sysMissing=() p src
+        mapfile -t sysPaths < <(system_asset_paths "${deployLog}")
+        for p in "${sysPaths[@]}"; do
+            [ -e "${p}" ] || sysMissing+=("${p}")
+        done
+
+        if [[ ${#sysPaths[@]} -gt 0 && ${#sysMissing[@]} -eq 0 ]]; then
+            print_log -y "[deploy] " -b "poznámka :: " "systémové assety (${#sysPaths[@]}) už na stroji sú, deploy ich nechal tak"
+            for p in "${sysPaths[@]}"; do
+                print_log -b "             " "${p}"
+            done
+        else
+            print_log -r "[deploy] " -crit "ERROR" "install.sh skončil s chybou, zvyšok sa preskakuje"
+            for p in "${sysMissing[@]}"; do
+                print_log -y "[deploy] " -b "chýba :: " "${p}"
+                if src="$(user_copy_of "${p}")" && [[ -e "${src}" ]]; then
+                    print_log -y "[deploy] " -b "doplníš :: " "sudo cp -a \"${src}\" \"$(dirname "${p}")/\""
+                fi
+            done
+            print_log -y "[deploy] " -b "tip :: " "ak chýbali balíky, spusti Scripts/install.sh -i -s a potom tento skript znova"
+            rm -f "${deployLog}"
+            return 1
+        fi
+    fi
+    rm -f "${deployLog}"
 
     print_log -sec "deploy" -b "krok 2/2 :: " "install_pst.sh"
     export flg_DryRun="${dryRun}"
